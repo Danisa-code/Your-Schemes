@@ -1,0 +1,6 @@
+{
+  "name": "Your Schemes",
+  "description": "A spacious, voice-activated Indian agricultural application supporting multiple languages with real-time crop scheme matching, land evaluations, and structured application forms.",
+  "requestFramePermissions": ["microphone"],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}

@@ -1,0 +1,186 @@
+/**
+ * Mock data for AGMARKNET integration — Tamil Nadu Only.
+ * These responses exactly mirror the expected live API response format.
+ * When live AGMARKNET integration is enabled, the agmarknetService.ts will
+ * replace these with real fetched data — the frontend requires NO changes.
+ */
+
+export const MOCK_COMMODITIES = [
+  { id: "TOMATO", name: "Tomato" },
+  { id: "ONION", name: "Onion" },
+  { id: "POTATO", name: "Potato" },
+  { id: "BRINJAL", name: "Brinjal" },
+  { id: "CHILLI", name: "Chilli" },
+  { id: "BHENDI", name: "Bhendi" },
+  { id: "DRUMSTICK", name: "Drumstick" },
+  { id: "BANANA", name: "Banana" },
+  { id: "COCONUT", name: "Coconut" },
+  { id: "GROUNDNUT", name: "Groundnut" },
+  { id: "TAMARIND", name: "Tamarind" },
+  { id: "SUGARCANE", name: "Sugarcane" },
+  { id: "RICE", name: "Rice" },
+];
+
+// Tamil Nadu only
+export const MOCK_STATES = ["Tamil Nadu"];
+
+// Tamil Nadu districts from districtMarketMap
+export const MOCK_DISTRICTS: Record<string, string[]> = {
+  "Tamil Nadu": [
+    "Kancheepuram",
+    "Tiruvallur",
+    "Chengalpattu",
+    "Cuddalore",
+    "Villupuram",
+    "Kallakurichi",
+    "Vellore",
+    "Ranipet",
+    "Tirupattur",
+    "Thiruvannamalai",
+    "Namakkal",
+    "Salem",
+    "Erode",
+    "Coimbatore",
+    "Tiruppur",
+    "Dharmapuri",
+    "Krishnagiri",
+    "Tiruchirapalli",
+    "Karur",
+    "Perambalur",
+    "Ariyalur",
+    "Thanjavur",
+    "Tiruvarur",
+    "Nagapattinam",
+    "Pudukkottai",
+    "Madurai",
+    "Dindigul",
+    "Theni",
+    "Sivagangai",
+    "Ramanathapuram",
+    "Virudhunagar",
+    "Tirunelveli",
+    "Tenkasi",
+    "Thoothukudi",
+    "Kanniyakumari",
+    "TheNilgiris",
+  ],
+};
+
+export const MOCK_MARKETS: Record<string, string[]> = {
+  "Salem": ["Ammapet", "Attur", "Hasthampatti", "Edapadi"],
+  "Madurai": ["Anna nagar", "Chokkikulam", "Palanganatham", "Melur"],
+  "Coimbatore": ["R.S.Puram", "Singanallur", "Pollachi", "Vadavalli"],
+  "Erode": ["Gobichettipalayam", "Perundurai", "Sampath Nagar"],
+  "Tiruchirapalli": ["Anna Nagar", "K.K.Nagar", "Thuraiyur"],
+  "Thanjavur": ["Kumbakonam", "Pattukottai", "Papanasam"],
+  "Tirunelveli": ["Palayamkottai", "Melapalayam", "Ambasamudram"],
+  "Kancheepuram": ["Kancheepuram", "Padappai", "Sunguvarchatram"],
+  "Vellore": ["Vellore", "Katpadi", "Gudiyatham"],
+  "TheNilgiris": ["Udhagamandalam", "Coonoor", "Kothagiri"],
+};
+
+const today = new Date().toISOString().split("T")[0];
+
+export const MOCK_MANDI_PRICES = [
+  {
+    commodity: "Tomato",
+    market: "Ammapet",
+    district: "Salem",
+    state: "Tamil Nadu",
+    arrivalDate: today,
+    minimumPrice: 800,
+    maximumPrice: 1600,
+    modalPrice: 1200,
+    unit: "₹/Quintal",
+  },
+  {
+    commodity: "Onion",
+    market: "Singanallur",
+    district: "Coimbatore",
+    state: "Tamil Nadu",
+    arrivalDate: today,
+    minimumPrice: 1200,
+    maximumPrice: 2000,
+    modalPrice: 1600,
+    unit: "₹/Quintal",
+  },
+  {
+    commodity: "Brinjal",
+    market: "Anna nagar",
+    district: "Madurai",
+    state: "Tamil Nadu",
+    arrivalDate: today,
+    minimumPrice: 600,
+    maximumPrice: 1200,
+    modalPrice: 900,
+    unit: "₹/Quintal",
+  },
+  {
+    commodity: "Chilli",
+    market: "Attur",
+    district: "Salem",
+    state: "Tamil Nadu",
+    arrivalDate: today,
+    minimumPrice: 5000,
+    maximumPrice: 8000,
+    modalPrice: 6500,
+    unit: "₹/Quintal",
+  },
+  {
+    commodity: "Banana",
+    market: "Pollachi",
+    district: "Coimbatore",
+    state: "Tamil Nadu",
+    arrivalDate: today,
+    minimumPrice: 1500,
+    maximumPrice: 2500,
+    modalPrice: 2000,
+    unit: "₹/Quintal",
+  },
+  {
+    commodity: "Coconut",
+    market: "Papanasam",
+    district: "Thanjavur",
+    state: "Tamil Nadu",
+    arrivalDate: today,
+    minimumPrice: 1400,
+    maximumPrice: 1800,
+    modalPrice: 1600,
+    unit: "₹/Quintal",
+  },
+  {
+    commodity: "Groundnut",
+    market: "Gobichettipalayam",
+    district: "Erode",
+    state: "Tamil Nadu",
+    arrivalDate: today,
+    minimumPrice: 5200,
+    maximumPrice: 6200,
+    modalPrice: 5700,
+    unit: "₹/Quintal",
+  },
+  {
+    commodity: "Drumstick",
+    market: "Udhagamandalam",
+    district: "TheNilgiris",
+    state: "Tamil Nadu",
+    arrivalDate: today,
+    minimumPrice: 1500,
+    maximumPrice: 2500,
+    modalPrice: 2000,
+    unit: "₹/Quintal",
+  },
+];
+
+export const MOCK_HISTORY = [
+  { date: "2026-07-13", modalPrice: 1100 },
+  { date: "2026-07-14", modalPrice: 1150 },
+  { date: "2026-07-15", modalPrice: 1300 },
+  { date: "2026-07-16", modalPrice: 1250 },
+  { date: "2026-07-17", modalPrice: 1400 },
+  { date: "2026-07-18", modalPrice: 1350 },
+  { date: "2026-07-19", modalPrice: 1200 },
+  { date: "2026-07-20", modalPrice: 1100 },
+  { date: "2026-07-21", modalPrice: 1150 },
+  { date: "2026-07-22", modalPrice: 1200 },
+];

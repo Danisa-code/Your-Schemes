@@ -1,0 +1,64 @@
+{
+  "groups": [
+    {
+      "name": "app",
+      "type": "com.farmersportal.config.AppProperties$CustomProperties",
+      "sourceType": "com.farmersportal.config.AppProperties$CustomProperties"
+    },
+    {
+      "name": "app.api",
+      "type": "com.farmersportal.config.AppProperties$CustomProperties$Api",
+      "sourceType": "com.farmersportal.config.AppProperties$CustomProperties",
+      "sourceMethod": "public com.farmersportal.config.AppProperties.CustomProperties.Api getApi() "
+    },
+    {
+      "name": "app.cache",
+      "type": "com.farmersportal.config.AppProperties$CustomProperties$Cache",
+      "sourceType": "com.farmersportal.config.AppProperties$CustomProperties",
+      "sourceMethod": "public com.farmersportal.config.AppProperties.CustomProperties.Cache getCache() "
+    },
+    {
+      "name": "gov",
+      "type": "com.farmersportal.config.AppProperties$GovProperties",
+      "sourceType": "com.farmersportal.config.AppProperties$GovProperties"
+    },
+    {
+      "name": "supabase",
+      "type": "com.farmersportal.config.AppProperties$SupabaseProperties",
+      "sourceType": "com.farmersportal.config.AppProperties$SupabaseProperties"
+    }
+  ],
+  "properties": [
+    {
+      "name": "app.api.timeout-ms",
+      "type": "java.lang.String",
+      "sourceType": "com.farmersportal.config.AppProperties$CustomProperties$Api"
+    },
+    {
+      "name": "app.cache.refresh-rate-ms",
+      "type": "java.lang.String",
+      "sourceType": "com.farmersportal.config.AppProperties$CustomProperties$Cache"
+    },
+    {
+      "name": "gov.api-key",
+      "type": "java.lang.String",
+      "sourceType": "com.farmersportal.config.AppProperties$GovProperties"
+    },
+    {
+      "name": "gov.api-url",
+      "type": "java.lang.String",
+      "sourceType": "com.farmersportal.config.AppProperties$GovProperties"
+    },
+    {
+      "name": "supabase.key",
+      "type": "java.lang.String",
+      "sourceType": "com.farmersportal.config.AppProperties$SupabaseProperties"
+    },
+    {
+      "name": "supabase.url",
+      "type": "java.lang.String",
+      "sourceType": "com.farmersportal.config.AppProperties$SupabaseProperties"
+    }
+  ],
+  "hints": []
+}
