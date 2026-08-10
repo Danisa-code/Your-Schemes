@@ -16,6 +16,9 @@ import { AdminDashboard } from "./pages/AdminDashboard";
 import { AgriVisionEvaluator } from "./components/AgriVisionEvaluator";
 import { motion, AnimatePresence } from "motion/react";
 import { weatherApi, WeatherResponse } from "./services/weatherApi";
+import { useAuth } from "./context/AuthContext";
+import { Loader2 } from "lucide-react";
+import { supabase } from "./services/supabase";
 
 const getWeatherIcon = (code: number) => {
   if (code === 0) return "wb_sunny";
@@ -46,6 +49,123 @@ export default function App() {
     }
     return "/";
   });
+
+  // Authentication State
+  const [isLoggedIn, setIsLoggedIn] = useState(() => {
+    if (typeof window !== "undefined") {
+      return localStorage.getItem("isLoggedIn") === "true";
+    }
+    return false;
+  });
+
+  const [usernameState, setUsernameState] = useState(() => {
+    if (typeof window !== "undefined") {
+      return localStorage.getItem("loggedInUsername") || "Rajesh Patel";
+    }
+    return "Rajesh Patel";
+  });
+
+  const [emailState, setEmailState] = useState(() => {
+    if (typeof window !== "undefined") {
+      return localStorage.getItem("loggedInEmail") || "rajesh@krishisahay.in";
+    }
+    return "rajesh@krishisahay.in";
+  });
+
+  // Supabase Auth Hook & State Sync
+  const auth = useAuth();
+
+  useEffect(() => {
+    if (auth.user) {
+      setIsLoggedIn(true);
+      setUsernameState(auth.user.user_metadata?.username || auth.user.user_metadata?.full_name || auth.user.email?.split("@")[0] || "Farmer");
+      setEmailState(auth.user.email || "");
+      if (currentPath.startsWith("/auth/callback")) {
+        navigateToPath("/");
+      }
+    } else {
+      // Maintain session state if logged in as Guest Farmer
+      const storedIsLoggedIn = localStorage.getItem("isLoggedIn") === "true";
+      const storedUsername = localStorage.getItem("loggedInUsername");
+      const storedEmail = localStorage.getItem("loggedInEmail");
+      
+      if (storedIsLoggedIn && storedUsername === "Guest Farmer") {
+        setIsLoggedIn(true);
+        setUsernameState(storedUsername);
+        setEmailState(storedEmail || "guest@krishisahay.in");
+      } else {
+        setIsLoggedIn(false);
+        setUsernameState("Rajesh Patel");
+        setEmailState("rajesh@krishisahay.in");
+      }
+    }
+  }, [auth.user, currentPath]);
+
+  const handleLogout = async () => {
+    await auth.logout();
+    setIsLoggedIn(false);
+    setUsernameState("Rajesh Patel");
+    setEmailState("rajesh@krishisahay.in");
+    navigateToPath("/login");
+  };
+
+  useEffect(() => {
+    const handleCallback = async () => {
+      if (typeof window === "undefined") return;
+      
+      const url = new URL(window.location.href);
+      const code = url.searchParams.get("code");
+      const hash = url.hash;
+      
+      // 1. Process PKCE Code parameters
+      if (code) {
+        console.log("[Auth Callback] Detected 'code' parameter in URL. Commencing exchange...");
+        try {
+          const { session, error } = await auth.exchangeCodeForSession(code);
+          if (error) throw error;
+          console.log("[Auth Callback] Code exchange successful. User logged in:", session?.user?.email);
+          
+          if (session?.user) {
+            setIsLoggedIn(true);
+            setUsernameState(session.user.user_metadata?.username || session.user.user_metadata?.full_name || session.user.email?.split("@")[0] || "Farmer");
+            setEmailState(session.user.email || "");
+          }
+          
+          // Clean URL parameters
+          url.searchParams.delete("code");
+          window.history.replaceState({}, document.title, url.pathname + url.search);
+          navigateToPath("/");
+        } catch (err) {
+          console.error("[Auth Callback] Code exchange failed:", err);
+        }
+      }
+      
+      // 2. Clean up hash tokens from magic link/OAuth if present
+      if (hash && (hash.includes("access_token") || hash.includes("error"))) {
+        console.log("[Auth Callback] Detected token or error in URL hash fragment.");
+        try {
+          // Give Supabase client a small tick to parse the hash
+          const { data: { session }, error } = await supabase.auth.getSession();
+          if (error) throw error;
+          
+          if (session?.user) {
+            console.log("[Auth Callback] Hash session parsed successfully. User:", session.user.email);
+            setIsLoggedIn(true);
+            setUsernameState(session.user.user_metadata?.username || session.user.user_metadata?.full_name || session.user.email?.split("@")[0] || "Farmer");
+            setEmailState(session.user.email || "");
+          }
+          
+          // Clean hash fragment
+          window.history.replaceState({}, document.title, window.location.pathname + window.location.search);
+          navigateToPath("/");
+        } catch (err) {
+          console.error("[Auth Callback] Hash parsing failed:", err);
+        }
+      }
+    };
+
+    handleCallback();
+  }, [currentPath]);
 
   useEffect(() => {
     const handlePopState = () => {
@@ -103,6 +223,19 @@ export default function App() {
   const [speechSupported, setSpeechSupported] = useState(true);
   const [showVoiceGuide, setShowVoiceGuide] = useState(true);
   const [micError, setMicError] = useState(false);
+  const [voices, setVoices] = useState<SpeechSynthesisVoice[]>([]);
+
+  useEffect(() => {
+    if ("speechSynthesis" in window) {
+      const updateVoices = () => {
+        setVoices(window.speechSynthesis.getVoices());
+      };
+      updateVoices();
+      if (window.speechSynthesis.onvoiceschanged !== undefined) {
+        window.speechSynthesis.onvoiceschanged = updateVoices;
+      }
+    }
+  }, []);
 
   // Logo State (uses official logo asset at /logo.jpeg or custom uploaded JPEG logo)
   const [appLogo, setAppLogo] = useState<string>("/logo.jpeg");
@@ -348,89 +481,37 @@ export default function App() {
     if (recognitionRef.current) {
       const locales: Record<LanguageCode, string> = {
         en: "en-IN",
-        hi: "hi-IN",
-        mr: "mr-IN",
-        te: "te-IN",
-        pa: "pa-IN",
         ta: "ta-IN",
       };
       recognitionRef.current.lang = locales[lang];
     }
   }, [lang]);
+  // Automatic voice greeting disabled as requested;
 
-  // Automatic voice greeting to the farmer on entering the app (with language support and auto-play workaround)
-  useEffect(() => {
-    let spoken = false;
-
-    const getGreetingMessage = (language: LanguageCode) => {
-      switch (language) {
-        case "hi":
-          return "शुभ प्रभात, राजेश पटेल। योर स्कीम्स में आपका स्वागत है। आज मैं आपकी क्या सहायता कर सकती हूँ?";
-        case "mr":
-          return "शुभ प्रभात, राजेश पटेल. तुमच्या योजना मध्ये आपले स्वागत आहे. आज मी आपल्याला कशी मदत करू शकते?";
-        case "te":
-          return "శుభోదయం, రాజేష్ పటేల్. మీ పథకాలు యాప్ లోకి మీకు స్వాగతం. ఈరోజు నేను మీకు ఎలా సహాయపడగలను?";
-        case "pa":
-          return "ਸ਼ੁਭ ਸਵੇਰ, ਰਾਜੇਸ਼ ਪਟੇਲ। ਤੁਹਾਡੀਆਂ ਸਕੀਮਾਂ ਐਪ ਵਿੱਚ ਤੁਹਾਡਾ ਸੁਆਗਤ ਹੈ। ਅੱਜ ਮੈਂ ਤੁਹਾਡੀ ਕੀ ਮਦਦ ਕਰ ਸਕਦਾ ਹਾਂ?";
-        case "ta":
-          return "காலை வணக்கம், ராஜேஷ் படேல். உங்கள் திட்டங்கள் செயலியில் உங்களை வரவேற்கிறோம். இன்று நான் உங்களுக்கு எவ்வாறு உதவ முடியும்?";
-        case "en":
-        default:
-          return "Good Morning, Rajesh Patel. Welcome to Your Schemes. How can I assist you with your agricultural growth today?";
-      }
-    };
-
-    const triggerGreeting = () => {
-      if (spoken) return;
-      spoken = true;
-      const msg = getGreetingMessage(lang);
-      
-      setAiSpeechResponse(msg);
-      speakConfirmation(msg);
-      removeListeners();
-    };
-
-    const removeListeners = () => {
-      window.removeEventListener("click", triggerGreeting);
-      window.removeEventListener("keydown", triggerGreeting);
-      window.removeEventListener("touchstart", triggerGreeting);
-    };
-
-    // Try speaking after 800ms to allow browser voices to load
-    const timeoutId = setTimeout(() => {
-      triggerGreeting();
-    }, 800);
-
-    // Register user interaction fallback triggers to bypass modern browser auto-play policy blocks
-    window.addEventListener("click", triggerGreeting);
-    window.addEventListener("keydown", triggerGreeting);
-    window.addEventListener("touchstart", triggerGreeting);
-
-    return () => {
-      clearTimeout(timeoutId);
-      removeListeners();
-    };
-  }, [lang]);
-
-  // text-to-speech speaker confirmation helper
-  const speakConfirmation = (message: string) => {
+  const speakConfirmation = (message: string, speechLang?: LanguageCode) => {
+    const activeLang = speechLang || lang;
     if ("speechSynthesis" in window) {
       window.speechSynthesis.cancel();
       const utterance = new SpeechSynthesisUtterance(message);
       
       // Attempt to pick a suitable voice for Indian accents/languages
-      const voices = window.speechSynthesis.getVoices();
+      const voiceList = voices.length > 0 ? voices : window.speechSynthesis.getVoices();
       let matchVoice = null;
-      if (lang === "hi") {
-        matchVoice = voices.find(v => v.lang.includes("hi-IN") || v.lang.includes("hi"));
-      } else if (lang === "ta") {
-        matchVoice = voices.find(v => v.lang.includes("ta-IN") || v.lang.includes("ta"));
-      } else if (lang === "en") {
-        matchVoice = voices.find(v => v.lang.includes("en-IN") || v.name.includes("India"));
+      if (activeLang === "ta") {
+        matchVoice = voiceList.find(v => v.lang.includes("ta-IN") || v.lang.includes("ta"));
+      } else if (activeLang === "en") {
+        matchVoice = voiceList.find(v => v.lang.includes("en-IN") || v.name.includes("India") || v.lang.includes("en-GB") || v.lang.includes("en"));
       }
+      
       if (matchVoice) {
         utterance.voice = matchVoice;
       }
+      
+      const langTags: Record<LanguageCode, string> = {
+        en: "en-IN",
+        ta: "ta-IN",
+      };
+      utterance.lang = langTags[activeLang] || "en-IN";
       
       // Adjust pitch/rate for clear accessibility
       utterance.pitch = 1.0;
@@ -440,33 +521,26 @@ export default function App() {
   };
 
   // Submit voice transcript to backend endpoint (or client-side parser fallback)
-  const handleVoiceCommand = async (inputText: string) => {
+  const handleVoiceCommand = async (inputText: string, voiceLang?: LanguageCode) => {
     setVoiceStatus("processing");
+    const activeLang = voiceLang || lang;
     const textLower = inputText.toLowerCase();
 
     // Direct voice commands for switching dark/light themes
     if (textLower.includes("dark mode") || textLower.includes("night mode") || textLower.includes("डार्क मोड") || textLower.includes("डार्क") || textLower.includes("ਨਾਈਟ ਮੋਡ") || textLower.includes("ਡਾਰਕ") || textLower.includes("काळी") || textLower.includes("నలుపు") || textLower.includes("இருண்ட") || textLower.includes("இருட்டு") || textLower.includes("டார்க்")) {
       setDarkMode(true);
-      const msg = lang === "hi" ? "डार्क मोड सक्रिय हो गया है।" :
-                  lang === "mr" ? "डार्क मोड सक्रिय केला आहे." :
-                  lang === "te" ? "డార్క్ మోడ్ యాక్టివేట్ చేయబడింది." :
-                  lang === "pa" ? "ਡਾਰਕ ਮੋਡ ਚਾਲੂ ਹੋ ਗਿਆ ਹੈ।" :
-                  lang === "ta" ? "இருண்ட பயன்முறை செயல்படுத்தப்பட்டது." :
+      const msg = activeLang === "ta" ? "\u0b87\u0bb0\u0bc1\u0ba3\u0bcd\u0b9f \u0baa\u0baf\u0ba9\u0bcd\u0bae\u0bc1\u0bb1\u0bc8 \u0b9a\u0bc6\u0baf\u0bb2\u0bcd\u0baa\u0b9f\u0bc1\u0ba4\u0bcd\u0ba4\u0baa\u0bcd\u0baa\u0b9f\u0bcd\u0b9f\u0ba4\u0bc1." :
                   "Dark Mode is now active.";
       setAiSpeechResponse(msg);
-      speakConfirmation(msg);
+      speakConfirmation(msg, activeLang);
       setVoiceStatus("idle");
       return;
     } else if (textLower.includes("light mode") || textLower.includes("day mode") || textLower.includes("लाइट मोड") || textLower.includes("लाइट") || textLower.includes("ਲਾਈਟ") || textLower.includes("తెలుపు") || textLower.includes("पांढरा") || textLower.includes("ஒளி") || textLower.includes("லைட்")) {
       setDarkMode(false);
-      const msg = lang === "hi" ? "लाइट मोड सक्रिय हो गया है।" :
-                  lang === "mr" ? "लाइट मोड सक्रिय केला आहे." :
-                  lang === "te" ? "లైట్ మోడ్ యాక్టివేట్ చేయబడింది." :
-                  lang === "pa" ? "ਲਾਈਟ ਮੋਡ ਚਾਲੂ ਹੋ ਗਿਆ ਹੈ।" :
-                  lang === "ta" ? "ஒளி பயன்முறை செயல்படுத்தப்பட்டது." :
+      const msg = activeLang === "ta" ? "\u0b92\u0bb3\u0bbf \u0baa\u0baf\u0ba9\u0bcd\u0bae\u0bc1\u0bb1\u0bc8 \u0b9a\u0bc6\u0baf\u0bb2\u0bcd\u0baaடு\u0ba4்\u0ba4\u0baa்\u0baaட்டது." :
                   "Light Mode is now active.";
       setAiSpeechResponse(msg);
-      speakConfirmation(msg);
+      speakConfirmation(msg, activeLang);
       setVoiceStatus("idle");
       return;
     }
@@ -477,7 +551,7 @@ export default function App() {
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           text: inputText,
-          currentLanguage: lang,
+          currentLanguage: activeLang,
           currentScreen: screen,
         }),
       });
@@ -487,19 +561,35 @@ export default function App() {
       }
 
       const directive: VoiceCommandResponse = await response.json();
+      if (directive.isFallback) {
+        throw new Error("Backend is in fallback mode");
+      }
+      
+      let targetLang = activeLang;
+      if (directive.action === "CHANGE_LANGUAGE" && directive.data?.languageCode) {
+        const newLang = directive.data.languageCode as LanguageCode;
+        if (["en", "hi", "mr", "te", "pa", "ta"].includes(newLang)) {
+          targetLang = newLang;
+          setLang(newLang);
+        }
+      }
+
       setAiSpeechResponse(directive.voiceResponse);
-      speakConfirmation(directive.voiceResponse);
+      speakConfirmation(directive.voiceResponse, targetLang);
 
       // Execute Redirection Directives
       if (directive.action === "NAVIGATE" && directive.target) {
         const trg = directive.target.toLowerCase();
-        if (["home", "schemes", "land", "profile", "apply_scheme", "calculators", "community"].includes(trg)) {
-          setScreen(trg as AppScreen);
-          if (trg === "apply_scheme") {
+        let targetScreen = trg;
+        if (trg === "mandi") targetScreen = "mandi_prices";
+        if (["home", "schemes", "land", "profile", "apply_scheme", "calculators", "community", "mandi_prices"].includes(targetScreen)) {
+          setScreen(targetScreen as AppScreen);
+          if (targetScreen === "apply_scheme") {
             setAppStep(1);
           }
         }
       } else if (directive.action === "CHANGE_LANGUAGE" && directive.data?.languageCode) {
+        // Handled above, but let's make sure if we didn't update it yet
         const newLang = directive.data.languageCode as LanguageCode;
         if (["en", "hi", "mr", "te", "pa", "ta"].includes(newLang)) {
           setLang(newLang);
@@ -547,65 +637,62 @@ export default function App() {
       // Client-side rule fallback mechanism (for offline or local parsing)
       const lowercase = inputText.toLowerCase();
       let responseText = "Understood. Performing action.";
-      
-      if (lowercase.includes("home") || lowercase.includes("dashboard") || lowercase.includes("முகப்பு")) {
+      let targetLang = activeLang;
+
+      if (lowercase.includes("home") || lowercase.includes("dashboard") || lowercase.includes("முகப்பு") || lowercase.includes("டேஷ்போர்டு")) {
         setScreen("home");
-        responseText = lang === "ta" ? "முகப்புப் பக்கத்திற்கு உங்களை அழைத்துச் செல்கிறோம்." : "Redirecting you to the Home Dashboard.";
-      } else if (lowercase.includes("calculator") || lowercase.includes("profit") || lowercase.includes("subsidy") || lowercase.includes("valuation") || lowercase.includes("கணக்கீடு") || lowercase.includes("கணக்கீடுகள்")) {
+        responseText = activeLang === "ta" ? "முகப்புப் பக்கத்திற்கு உங்களை அழைத்துச் செல்கிறோம்." : "Redirecting you to the Home Dashboard.";
+      } else if (lowercase.includes("calculator") || lowercase.includes("profit") || lowercase.includes("subsidy") || lowercase.includes("கணக்கீடு") || lowercase.includes("கணக்கீடுகள்") || lowercase.includes("லாபம்") || lowercase.includes("மானியம்")) {
         setScreen("calculators");
-        responseText = lang === "ta" ? "விவசாய கணக்கீடுகளைத் திறக்கிறது." : "Opening agricultural calculators and scheme recommendations.";
-      } else if (lowercase.includes("community") || lowercase.includes("forum") || lowercase.includes("disease") || lowercase.includes("mandi") || lowercase.includes("market") || lowercase.includes("சமூகம்")) {
+        responseText = activeLang === "ta" ? "விவசாய கணக்கீடுகளைத் திறக்கிறது." : "Opening agricultural calculators and scheme recommendations.";
+      } else if (lowercase.includes("mandi") || lowercase.includes("market price") || lowercase.includes("commodity price") || lowercase.includes("மண்டி") || lowercase.includes("சந்தை") || lowercase.includes("விலை")) {
+        setScreen("mandi_prices");
+        responseText = activeLang === "ta" ? "மண்டி விலை பக்கத்தைத் திறக்கிறது." : "Opening Live Mandi prices page.";
+      } else if (lowercase.includes("disease") || lowercase.includes("நோய்") || lowercase.includes("கண்டறி")) {
+        setScreen("disease_detection");
+        responseText = activeLang === "ta" ? "பயிர் நோய் கண்டறிதல் பக்கத்தைத் திறக்கிறது." : "Opening Crop Disease Diagnostics scanner.";
+      } else if (lowercase.includes("community") || lowercase.includes("forum") || lowercase.includes("சமூகம்") || lowercase.includes("விவாதம்")) {
         setScreen("community");
-        responseText = lang === "ta" ? "விவசாயி சமூகப் பக்கத்தைத் திறக்கிறது." : "Opening the farmer community hub and crop diagnostics.";
-      } else if (lowercase.includes("scheme") || lowercase.includes("yojana") || lowercase.includes("योजना") || lowercase.includes("திட்டம்") || lowercase.includes("திட்டங்கள்")) {
+        responseText = activeLang === "ta" ? "விவசாயி சமூகப் பக்கத்தைத் திறக்கிறது." : "Opening the farmer community hub.";
+      } else if (lowercase.includes("scheme") || lowercase.includes("yojana") || lowercase.includes("திட்டம்") || lowercase.includes("திட்டங்கள்")) {
         setScreen("schemes");
-        responseText = lang === "ta" ? "விவசாயத் திட்டங்களைத் திறக்கிறது." : "Opening the Schemes page.";
-      } else if (lowercase.includes("land") || lowercase.includes("evaluation") || lowercase.includes("जमीन") || lowercase.includes("భూమి") || lowercase.includes("நிலம்")) {
+        responseText = activeLang === "ta" ? "விவசாயத் திட்டங்களைத் திறக்கிறது." : "Opening the Schemes page.";
+      } else if (lowercase.includes("land") || lowercase.includes("evaluation") || lowercase.includes("நிலம்") || lowercase.includes("மதிப்பீடு")) {
         setScreen("land");
-        responseText = lang === "ta" ? "நில மதிப்பீடு பக்கத்திற்குச் செல்கிறது." : "Navigating to Land Evaluation and soil health checks.";
-      } else if (lowercase.includes("profile") || lowercase.includes("खाता") || lowercase.includes("சுயவிவரம்")) {
+        responseText = activeLang === "ta" ? "நில மதிப்பீடு பக்கத்திற்குச் செல்கிறது." : "Navigating to Land Evaluation and soil health checks.";
+      } else if (lowercase.includes("profile") || lowercase.includes("சுயவிவரம்") || lowercase.includes("சுயவிவர")) {
         setScreen("profile");
-        responseText = lang === "ta" ? "சுயவிவரப் பக்கத்தைத் திறக்கிறது." : "Opening your profile page.";
-      } else if (lowercase.includes("hindi") || lowercase.includes("हिंदी")) {
-        setLang("hi");
-        responseText = "भाषा को बदलकर हिंदी कर दिया गया है।";
-      } else if (lowercase.includes("marathi") || lowercase.includes("मराठी")) {
-        setLang("mr");
-        responseText = "भाषा बदलून मराठी केली आहे.";
-      } else if (lowercase.includes("telugu") || lowercase.includes("తెలుగు")) {
-        setLang("te");
-        responseText = "భాషను తెలుగులోకి మార్చాము.";
-      } else if (lowercase.includes("punjabi") || lowercase.includes("ਪੰਜਾਬੀ")) {
-        setLang("pa");
-        responseText = "ਭਾਸ਼ਾ ਬਦਲ ਕੇ ਪੰਜਾਬੀ ਕਰ ਦਿੱਤੀ ਗਈ ਹੈ।";
+        responseText = activeLang === "ta" ? "சுயவிவரப் பக்கத்தைத் திறக்கிறது." : "Opening your profile page.";
       } else if (lowercase.includes("tamil") || lowercase.includes("தமிழ்")) {
+        targetLang = "ta";
         setLang("ta");
         responseText = "மொழி தமிழுக்கு வெற்றிகரமாக மாற்றப்பட்டது.";
-      } else if (lowercase.includes("english")) {
+      } else if (lowercase.includes("english") || lowercase.includes("ஆங்கிலம்")) {
+        targetLang = "en";
         setLang("en");
         responseText = "Switched to English language.";
-      } else if (lowercase.includes("apply") || lowercase.includes("kisan credit")) {
+      } else if (lowercase.includes("apply") || lowercase.includes("kisan credit") || lowercase.includes("விண்ணப்பி") || lowercase.includes("விண்ணப்பம்") || lowercase.includes("படிவம்")) {
         setSelectedScheme(SCHEMES[0]);
         setScreen("apply_scheme");
         setAppStep(1);
-        responseText = "Opening application for Kisan Credit Card.";
-      } else if (lowercase.includes("search")) {
-        const query = lowercase.replace("search", "").replace("for", "").trim();
+        responseText = activeLang === "ta" ? "கிசான் கிரெடிட் கார்டு விண்ணப்பத்தைத் திறக்கிறது." : "Opening application for Kisan Credit Card.";
+      } else if (lowercase.includes("search") || lowercase.includes("தேடு") || lowercase.includes("கண்டறி")) {
+        const query = lowercase.replace("search", "").replace("for", "").replace("தேடு", "").replace("தேடுக", "").trim();
         setScreen("schemes");
         setSearchQuery(query);
-        responseText = `Searching for ${query}.`;
-      } else if (lowercase.includes("submit") || lowercase.includes("send")) {
+        responseText = activeLang === "ta" ? "திட்டங்களைத் தேடுகிறது." : `Searching for ${query}.`;
+      } else if (lowercase.includes("submit") || lowercase.includes("send") || lowercase.includes("சமர்ப்பி") || lowercase.includes("அனுப்பு")) {
         if (screen === "apply_scheme") {
           setScreen("success");
-          responseText = "Submitting your application successfully.";
+          responseText = activeLang === "ta" ? "விண்ணப்பம் வெற்றிகரமாக சமர்ப்பிக்கப்பட்டது." : "Submitting your application successfully.";
         } else if (screen === "land") {
           triggerLandSubmit();
-          responseText = "Submitting your land evaluation report.";
+          responseText = activeLang === "ta" ? "நில மதிப்பீட்டு அறிக்கை சமர்ப்பிக்கப்படுகிறது." : "Submitting your land evaluation report.";
         }
       }
 
       setAiSpeechResponse(responseText);
-      speakConfirmation(responseText);
+      speakConfirmation(responseText, targetLang);
     } finally {
       setVoiceStatus("idle");
     }
@@ -719,8 +806,63 @@ export default function App() {
     }
   };
 
-  if (currentPath === "/login") {
-    return <LoginPage onBackToHome={() => navigateToPath("/")} />;
+  if (auth.loading) {
+    return (
+      <div className="min-h-screen w-full flex flex-col items-center justify-center bg-slate-50 text-slate-800 font-sans">
+        <Loader2 className="w-10 h-10 text-blue-600 animate-spin mb-4" />
+        <p className="text-xs font-semibold tracking-wide text-slate-500 uppercase">Securing connection...</p>
+      </div>
+    );
+  }
+
+  const isCallbackUrl = typeof window !== "undefined" && 
+    (window.location.search.includes("code=") || window.location.hash.includes("access_token="));
+
+  if (currentPath.startsWith("/auth/callback") || isCallbackUrl) {
+    return (
+      <div className="min-h-screen w-full flex flex-col items-center justify-center bg-slate-50 text-slate-800 font-sans">
+        <Loader2 className="w-10 h-10 text-blue-600 animate-spin mb-4" />
+        <p className="text-xs font-semibold tracking-wide text-slate-500 uppercase">Completing sign in...</p>
+      </div>
+    );
+  }
+
+  if (currentPath === "/reset-password") {
+    return (
+      <LoginPage
+        mode="reset-password"
+        onLoginSuccess={(usr, email) => {
+          localStorage.setItem("isLoggedIn", "true");
+          localStorage.setItem("loggedInUsername", usr);
+          localStorage.setItem("loggedInEmail", email);
+          setIsLoggedIn(true);
+          setUsernameState(usr);
+          setEmailState(email);
+          navigateToPath("/");
+        }}
+      />
+    );
+  }
+
+  if (!isLoggedIn) {
+    return (
+      <LoginPage
+        mode="login"
+        onLoginSuccess={(usr, email) => {
+          localStorage.setItem("isLoggedIn", "true");
+          localStorage.setItem("loggedInUsername", usr);
+          localStorage.setItem("loggedInEmail", email);
+          setIsLoggedIn(true);
+          setUsernameState(usr);
+          setEmailState(email);
+          navigateToPath("/");
+        }}
+      />
+    );
+  }
+
+  if (currentPath === "/login" || currentPath === "/signup") {
+    navigateToPath("/");
   }
 
   return (
@@ -815,10 +957,6 @@ export default function App() {
               className="pl-7 pr-8 py-1.5 text-xs font-semibold bg-[#EEF4FD] hover:bg-slate-200 border-none rounded-full text-slate-800 focus:ring-2 focus:ring-primary outline-none transition cursor-pointer appearance-none"
             >
               <option value="en">English</option>
-              <option value="hi">हिंदी (Hindi)</option>
-              <option value="mr">मराठी (Marathi)</option>
-              <option value="te">తెలుగు (Telugu)</option>
-              <option value="pa">ਪੰਜਾਬੀ (Punjabi)</option>
               <option value="ta">தமிழ் (Tamil)</option>
             </select>
             <span className="material-symbols-outlined absolute right-2 text-slate-500 text-xs pointer-events-none">expand_more</span>
@@ -848,33 +986,45 @@ export default function App() {
             <span className="absolute top-2 right-2 w-2 h-2 bg-red-500 rounded-full"></span>
           </button>
 
-          {/* Secure Ledger Sign In Trigger Button */}
-          <button
-            onClick={() => navigateToPath("/login")}
-            className="flex h-10 px-4 items-center gap-1.5 rounded-full bg-blue-50 hover:bg-blue-100 text-blue-600 font-bold text-xs transition cursor-pointer active:scale-95"
-            title="Sign in to your secure Krishi account"
-          >
-            <span className="material-symbols-outlined text-sm font-bold">login</span>
-            <span className="hidden sm:inline">Sign In</span>
-          </button>
+          {/* Secure Ledger Sign In/Out Trigger Button */}
+          {isLoggedIn ? (
+            <button
+              onClick={handleLogout}
+              className="flex h-10 px-4 items-center gap-1.5 rounded-full bg-red-50 hover:bg-red-100 text-red-600 font-bold text-xs transition cursor-pointer active:scale-95 border-none"
+              title="Logout of your secure Krishi account"
+            >
+              <span className="material-symbols-outlined text-sm font-bold">logout</span>
+              <span className="hidden sm:inline">Logout</span>
+            </button>
+          ) : (
+            <button
+              onClick={() => navigateToPath("/login")}
+              className="flex h-10 px-4 items-center gap-1.5 rounded-full bg-blue-50 hover:bg-blue-100 text-blue-600 font-bold text-xs transition cursor-pointer active:scale-95 border-none"
+              title="Sign in to your secure Krishi account"
+            >
+              <span className="material-symbols-outlined text-sm font-bold">login</span>
+              <span className="hidden sm:inline">Sign In</span>
+            </button>
+          )}
 
           {/* User Profile Thumbnail */}
           <div className="flex items-center gap-2 border-l border-slate-200 pl-3">
-            <div className="w-10 h-10 rounded-full overflow-hidden border-2 border-[#beead1] shadow-sm">
-              <img 
-                className="w-full h-full object-cover" 
-                src="https://lh3.googleusercontent.com/aida-public/AB6AXuD45Exqc7s149CWz_WlS0a8AqTGKdBrWJAgE6Y-lm_1yGbg7jHe01Iy2hfd3FKXiSbTFn3dV2-ikn-9f0nK03xjwhI1fAiqz0GVrjiu-ekf7hsSTdkUTtxSl0ueaC5_r-ev4SMu_-XVNlKyY3MJwQGua1yKxmPIDMxRgaPdhQx4lhlrClITz7EptCbr5BBTDccIAo5Llqu-BpT7rAA_-2456u32EQJWPVE9k-UQEcB0sFLLp_0RRsJ52K7evhhvCGSX4eOJCaccftu8"
-                alt="Rajesh Patel Profile" 
-                referrerPolicy="no-referrer"
-              />
+            <div className="w-10 h-10 rounded-full border-2 border-[#beead1] shadow-sm flex items-center justify-center bg-emerald-600 text-white font-bold text-xs">
+              {usernameState ? usernameState.charAt(0).toUpperCase() : "U"}
             </div>
             <div className="hidden lg:block text-left">
               <p className="text-xs font-semibold text-slate-800 leading-tight">
-                {activeTranslations.rajesh}
+                {usernameState}
               </p>
-              <p className="text-[10px] text-slate-500">
-                {activeTranslations.gpsVerified}
+              <p className="text-[9px] text-slate-400">
+                {emailState} (GPS Verified)
               </p>
+              <button
+                onClick={handleLogout}
+                className="text-[9px] text-red-600 hover:text-red-800 font-bold bg-transparent border-none cursor-pointer p-0 underline block text-left mt-0.5"
+              >
+                Logout
+              </button>
             </div>
           </div>
 
@@ -1930,8 +2080,9 @@ export default function App() {
       <VoiceAssistant
         onCommand={(text: string, voiceLang: VoiceLang) => {
           setTranscriptText(text);
-          handleVoiceCommand(text);
+          handleVoiceCommand(text, voiceLang);
         }}
+        onLangChange={(newLang: VoiceLang) => setLang(newLang)}
         aiResponse={aiSpeechResponse}
         voiceStatus={voiceStatus}
         lang={lang}

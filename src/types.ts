@@ -1,4 +1,4 @@
-export type LanguageCode = "en" | "hi" | "mr" | "te" | "pa" | "ta";
+export type LanguageCode = "en" | "ta";
 
 export interface TranslationSet {
   goodMorning: string;

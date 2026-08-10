@@ -151,7 +151,7 @@ export const marketApi = {
         minimumPrice: Number(item.min_price),
         maximumPrice: Number(item.max_price),
         modalPrice: Number(item.modal_price),
-        unit: "Rs/Kg",
+        unit: item.unit || "₹/Kg",
       }));
 
       return {

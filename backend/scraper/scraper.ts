@@ -270,6 +270,7 @@ export async function runScraper() {
           min_price: minPrice,
           max_price: maxPrice,
           modal_price: modalPrice,
+          unit: '₹/Kg',
           source: 'Tamil Nadu Agrimark',
           source_state: 'Tamil Nadu',
           last_updated: new Date().toISOString()
@@ -308,8 +309,23 @@ export async function runScraper() {
       rowsFailed += allRecords.length;
     }
   } else if (!supabase) {
-    console.log("Dry run: Database not connected. Logging parsed prices to console (first 3 records):");
-    console.log(allRecords.slice(0, 3));
+    console.log("Dry run: Database not connected. Saving parsed prices to local file...");
+    try {
+      const fs = await import("fs");
+      const path = await import("path");
+      const dir = path.join(process.cwd(), "backend", "database", "json");
+      if (!fs.existsSync(dir)) {
+        fs.mkdirSync(dir, { recursive: true });
+      }
+      fs.writeFileSync(
+        path.join(dir, "scraped_mandi_prices.json"),
+        JSON.stringify(allRecords, null, 2),
+        "utf8"
+      );
+      console.log(`Saved ${allRecords.length} records to local json successfully.`);
+    } catch (err: any) {
+      console.error("Failed to write scraped prices locally:", err.message);
+    }
     rowsInserted = allRecords.length;
   }
 

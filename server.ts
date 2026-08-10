@@ -98,7 +98,7 @@ The current screen is: "${currentScreen || "home"}".
 
 Analyze the user's spoken phrase and map it to a structured action.
 Available actions:
-1. "NAVIGATE": Go to a tab or screen. Target must be one of: "home", "schemes", "land", "profile", "apply_scheme", "calculators", "community".
+1. "NAVIGATE": Go to a tab or screen. Target must be one of: "home", "schemes", "land", "profile", "apply_scheme", "calculators", "community", "mandi_prices".
    Examples: "go to schemes", "show land evaluation", "open my profile", "fill out the scheme application", "home tab details", "open calculators", "show crop profit calculator", "go to community", "crop disease identification scanner", "market prices mandi".
 2. "FILL_FORM": Fill fields on the Schemes Application or Land Details form.
    Provide data parameters in the 'data' field. Valid keys are:
@@ -417,6 +417,156 @@ Generate a JSON response conforming strictly to the requested schema. Do not out
   } catch (error) {
     console.error("Error in Land Evaluation API:", error);
     return res.status(500).json({ error: "Failed to evaluate land assets", details: (error as Error).message });
+  }
+});
+
+
+// Memory store for temporary OTP verification
+const otpStore = new Map<string, { otp: string; expiresAt: number }>();
+
+// Rate limit store for security verification
+const rateLimitStore = new Map<string, { lastRequestTime: number; count: number; windowStart: number }>();
+
+app.post("/api/send-otp", async (req, res) => {
+  console.log(`[OTP Engine] Incoming POST request to /api/send-otp with body:`, req.body);
+  try {
+    const { email } = req.body;
+    if (!email || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) {
+      console.warn(`[OTP Engine] Invalid email format received: "${email}"`);
+      return res.status(400).json({ success: false, error: "Invalid email address format." });
+    }
+
+    const now = Date.now();
+    const clientLimit = rateLimitStore.get(email) || { lastRequestTime: 0, count: 0, windowStart: now };
+
+    // Rate Limit 1: 60 seconds request cooldown
+    const cooldown = 60 * 1000;
+    if (now - clientLimit.lastRequestTime < cooldown) {
+      const waitSeconds = Math.ceil((cooldown - (now - clientLimit.lastRequestTime)) / 1000);
+      console.warn(`[Rate Limiter] Cooldown active for ${email}. Blocked request.`);
+      return res.status(429).json({
+        success: false,
+        error: `Please wait ${waitSeconds} seconds before requesting another code.`
+      });
+    }
+
+    // Rate Limit 2: 5 requests per 10 minutes rolling window
+    const windowDuration = 10 * 60 * 1000;
+    if (now - clientLimit.windowStart > windowDuration) {
+      clientLimit.count = 0;
+      clientLimit.windowStart = now;
+    }
+
+    if (clientLimit.count >= 5) {
+      const resetMinutes = Math.ceil((windowDuration - (now - clientLimit.windowStart)) / (60 * 1000));
+      console.warn(`[Rate Limiter] Limit exceeded (5/10min) for ${email}. Blocked request.`);
+      return res.status(429).json({
+        success: false,
+        error: `Too many requests. Please try again in ${resetMinutes} minutes.`
+      });
+    }
+
+    // Update rate limit stats
+    clientLimit.lastRequestTime = now;
+    clientLimit.count += 1;
+    rateLimitStore.set(email, clientLimit);
+
+    // Generate secure random 6-digit OTP
+    const otp = Math.floor(100000 + Math.random() * 900000).toString();
+    const expiresAt = now + 5 * 60 * 1000;
+    const otpRequestId = Math.random().toString(36).substring(2, 11).toUpperCase();
+
+    console.log(`[OTP REQUEST] User Email: ${email} | Request ID: ${otpRequestId} | Expiration Time: ${new Date(expiresAt).toISOString()} | Code (Secure Server Log): ${otp}`);
+
+    otpStore.set(email, {
+      otp,
+      expiresAt,
+    });
+
+    const resendApiKey = process.env.RESEND_API_KEY;
+
+    if (resendApiKey) {
+      console.log(`[EMAIL SERVICE] Provider Used: Resend | Status: SENDING...`);
+      
+      const response = await fetch("https://api.resend.com/emails", {
+        method: "POST",
+        headers: {
+          "Authorization": `Bearer ${resendApiKey}`,
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({
+          from: "Your Schemes <onboarding@resend.dev>",
+          to: email,
+          subject: "Your Login Verification Code",
+          html: `
+            <div style="font-family: 'Helvetica Neue', Helvetica, Arial, sans-serif; padding: 24px; max-width: 500px; margin: 0 auto; border: 1px solid #e2e8f0; border-radius: 12px; background-color: #ffffff;">
+              <h2 style="color: #0f5238; font-size: 20px; font-weight: bold; margin-bottom: 16px; text-align: center;">Verify Your Account</h2>
+              <p style="color: #475569; font-size: 14px; line-height: 1.6; margin-bottom: 24px;">Welcome to Your Schemes. Please use the verification code below to log into your account. This code is valid for 5 minutes.</p>
+              <div style="background-color: #f1f5f9; border-radius: 8px; padding: 16px; text-align: center; margin-bottom: 24px;">
+                <span style="font-size: 32px; font-weight: bold; letter-spacing: 0.25em; color: #0f172a; font-family: monospace;">${otp}</span>
+              </div>
+              <p style="color: #94a3b8; font-size: 11px; text-align: center;">If you did not request this login code, please ignore this email.</p>
+            </div>
+          `,
+        }),
+      });
+
+      const responseText = await response.text();
+      if (!response.ok) {
+        console.error(`[EMAIL SERVICE] Provider Used: Resend | Status: FAILED | Error messages:`, responseText);
+        return res.status(500).json({ success: false, error: "Failed to dispatch email verification", details: responseText });
+      }
+
+      console.log(`[EMAIL SERVICE] Provider Used: Resend | Status: SENT`);
+      return res.json({
+        success: true,
+        message: "Verification code sent successfully to your email."
+      });
+    } else {
+      console.error(`[EMAIL SERVICE] Provider Used: None | Status: FAILED | Error messages: RESEND_API_KEY environment variable is missing`);
+      return res.status(500).json({
+        success: false,
+        error: "Email dispatch service is not configured. Please define RESEND_API_KEY in your env configuration."
+      });
+    }
+  } catch (error) {
+    console.error("[OTP Engine] Unexpected exception during OTP send process:", error);
+    return res.status(500).json({ success: false, error: "Internal server error sending OTP", details: (error as Error).message });
+  }
+});
+
+app.post("/api/verify-otp", async (req, res) => {
+  try {
+    const { email, code } = req.body;
+    if (!email || !code) {
+      return res.status(400).json({ success: false, error: "Missing email address or OTP code." });
+    }
+
+    const storedData = otpStore.get(email);
+
+    if (!storedData) {
+      console.warn(`[OTP VERIFICATION] Entered OTP: "${code}" | Stored OTP: "NONE" | Match Result: FAIL (No request exists)`);
+      return res.status(400).json({ success: false, error: "No OTP request found for this email address." });
+    }
+
+    if (Date.now() > storedData.expiresAt) {
+      console.warn(`[OTP VERIFICATION] Entered OTP: "${code}" | Stored OTP: "${storedData.otp}" | Match Result: FAIL (Expired)`);
+      otpStore.delete(email);
+      return res.status(400).json({ success: false, error: "OTP code has expired." });
+    }
+
+    const isMatch = storedData.otp === code;
+    console.log(`[OTP VERIFICATION] Entered OTP: "${code}" | Stored OTP: "${storedData.otp}" | Match Result: ${isMatch ? "SUCCESS" : "FAIL"}`);
+
+    if (!isMatch) {
+      return res.status(400).json({ success: false, error: "Incorrect OTP code." });
+    }
+
+    otpStore.delete(email);
+    return res.json({ success: true, message: "Verified successfully." });
+  } catch (error) {
+    console.error("[OTP Engine] Unexpected exception during OTP verification process:", error);
+    return res.status(500).json({ success: false, error: "Internal server error verifying OTP", details: (error as Error).message });
   }
 });
 

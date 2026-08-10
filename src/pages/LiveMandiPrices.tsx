@@ -24,8 +24,8 @@ const formatDate = (iso: string) => {
 };
 
 function downloadCSV(data: MandiPrice[]) {
-  const headers = ["Commodity", "Market", "District", "State", "Arrival Date", "Min Price", "Max Price", "Modal Price", "Unit"];
-  const rows = data.map(r => [r.commodity, r.market, r.district, r.state, r.arrivalDate, r.minimumPrice, r.maximumPrice, r.modalPrice, r.unit]);
+  const headers = ["Commodity", "Market", "District", "State", "Arrival Date", "Price (Approx)", "Unit"];
+  const rows = data.map(r => [r.commodity, r.market, r.district, r.state, r.arrivalDate, r.modalPrice, r.unit]);
   const csv = [headers, ...rows].map(r => r.map(c => `"${c}"`).join(",")).join("\n");
   const blob = new Blob([csv], { type: "text/csv" });
   const url = URL.createObjectURL(blob);
@@ -62,16 +62,21 @@ const ErrorCard = ({ message, onRetry }: { message: string; onRetry?: () => void
   </div>
 );
 
-const EmptyState = () => (
-  <div className="flex flex-col items-center justify-center py-16 gap-4">
-    <div className="w-16 h-16 rounded-full bg-slate-100 dark:bg-slate-800 flex items-center justify-center">
-      <span className="material-symbols-outlined text-4xl text-slate-400">find_in_page</span>
+const EmptyState = ({ district, commodity }: { district?: string; commodity?: string }) => {
+  const details = [district, commodity].filter(Boolean).join(" and ");
+  return (
+    <div className="flex flex-col items-center justify-center py-16 gap-4">
+      <div className="w-16 h-16 rounded-full bg-slate-100 dark:bg-slate-800 flex items-center justify-center">
+        <span className="material-symbols-outlined text-4xl text-slate-400">find_in_page</span>
+      </div>
+      <p className="text-slate-500 dark:text-slate-400 font-medium text-center">
+        {details 
+          ? `No mandi prices available for the selected ${details.toLowerCase()}.`
+          : "No mandi prices available for the selected district and commodity."}
+      </p>
     </div>
-    <p className="text-slate-500 dark:text-slate-400 font-medium text-center">
-      No price data found. Try adjusting your filters.
-    </p>
-  </div>
-);
+  );
+};
 
 // ─── History Modal ─────────────────────────────────────────────────────────────
 
@@ -107,7 +112,7 @@ const HistoryModal = ({
         <div className="flex justify-between items-start mb-5">
           <div>
             <h3 className="text-lg font-bold text-slate-800 dark:text-white">{row.commodity} — {row.market}</h3>
-            <p className="text-sm text-slate-500 dark:text-slate-400 mt-0.5">Historical Modal Prices (₹/Quintal)</p>
+            <p className="text-sm text-slate-500 dark:text-slate-400 mt-0.5">Historical Prices (₹/Quintal)</p>
           </div>
           <button onClick={onClose} className="w-9 h-9 rounded-full bg-slate-100 dark:bg-slate-800 hover:bg-slate-200 dark:hover:bg-slate-700 flex items-center justify-center text-slate-600 dark:text-slate-400 transition">
             <span className="material-symbols-outlined text-lg">close</span>
@@ -121,7 +126,7 @@ const HistoryModal = ({
               <XAxis dataKey="date" tick={{ fontSize: 10 }} tickFormatter={d => d.slice(5)} />
               <YAxis tick={{ fontSize: 10 }} tickFormatter={v => `₹${(v as number / 1000).toFixed(1)}k`} />
               <Tooltip
-                formatter={(v) => [`₹${v}`, "Modal Price"]}
+                formatter={(v) => [`₹${v}`, "Price (Approx)"]}
                 labelFormatter={l => `Date: ${l}`}
                 contentStyle={{ borderRadius: "12px", fontSize: "12px" }}
               />
@@ -151,9 +156,9 @@ const SummaryCards = ({ data, lastUpdated }: { data: MandiPrice[]; lastUpdated: 
 
   const cards = [
     { icon: "store", label: "Total Markets", value: data.length.toString(), color: "teal" },
-    { icon: "trending_up", label: "Highest Modal Price", value: formatCurrency(highest), color: "green" },
-    { icon: "trending_down", label: "Lowest Modal Price", value: formatCurrency(lowest), color: "orange" },
-    { icon: "analytics", label: "Average Modal Price", value: formatCurrency(avg), color: "blue" },
+    { icon: "trending_up", label: "Highest Price", value: formatCurrency(highest), color: "green" },
+    { icon: "trending_down", label: "Lowest Price", value: formatCurrency(lowest), color: "orange" },
+    { icon: "analytics", label: "Average Price", value: formatCurrency(avg), color: "blue" },
   ];
 
   const colorMap: Record<string, string> = {
@@ -239,7 +244,7 @@ export const LiveMandiPrices: React.FC = () => {
     }
   }, [selectedDistrict]);
 
-  const fetchPrices = useCallback(async (params?: typeof lastSearchParamsRef.current) => {
+  const fetchPrices = useCallback(async (params?: { commodity: string; state: string; district: string; market: string; date: string }) => {
     const p = params ?? lastSearchParamsRef.current;
     if (!p) return;
 
@@ -252,6 +257,7 @@ export const LiveMandiPrices: React.FC = () => {
         market: p.market || undefined,
         date: p.date || undefined,
       });
+      console.log("API Response:", res);
       setResults(res.data);
       setIsCached(res.isCached);
       setLastUpdated(res.lastUpdated);
@@ -271,22 +277,17 @@ export const LiveMandiPrices: React.FC = () => {
         setCommodities(comms);
         setStates(sts);
         setSelectedState("Tamil Nadu");
-        
-        // Auto trigger fetch on mount for Tamil Nadu mandi prices
-        const params = {
-          commodity: "",
-          state: "Tamil Nadu",
-          district: "",
-          market: "",
-          date: "",
-        };
-        lastSearchParamsRef.current = params;
-        fetchPrices(params);
       })
       .catch(console.error);
-  }, [fetchPrices]);
+  }, []);
 
-  const handleSearch = () => {
+  // Auto trigger fetch when filters change
+  useEffect(() => {
+    if (!selectedState && !selectedDistrict && !selectedCommodity) return;
+
+    console.log("District:", selectedDistrict);
+    console.log("Commodity:", selectedCommodity);
+
     const params = {
       commodity: selectedCommodity,
       state: selectedState,
@@ -298,8 +299,20 @@ export const LiveMandiPrices: React.FC = () => {
 
     // Set up 15-minute auto refresh
     if (refreshIntervalRef.current) clearInterval(refreshIntervalRef.current);
-    refreshIntervalRef.current = setInterval(() => fetchPrices(), 15 * 60 * 1000);
+    refreshIntervalRef.current = setInterval(() => fetchPrices(params), 15 * 60 * 1000);
 
+    fetchPrices(params);
+  }, [selectedDistrict, selectedCommodity, selectedMarket, selectedDate, selectedState, fetchPrices]);
+
+  const handleSearch = () => {
+    const params = {
+      commodity: selectedCommodity,
+      state: selectedState,
+      district: selectedDistrict,
+      market: selectedMarket,
+      date: selectedDate,
+    };
+    lastSearchParamsRef.current = params;
     fetchPrices(params);
   };
 
@@ -506,7 +519,7 @@ export const LiveMandiPrices: React.FC = () => {
 
         {!loading && !error && hasSearched && results.length === 0 && (
           <motion.div key="empty" initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }}>
-            <EmptyState />
+            <EmptyState district={selectedDistrict} commodity={selectedCommodity} />
           </motion.div>
         )}
 
@@ -556,7 +569,7 @@ export const LiveMandiPrices: React.FC = () => {
                 <table className="w-full text-sm" role="table" aria-label="Mandi Prices Table">
                   <thead>
                     <tr className="bg-slate-50 dark:bg-slate-800/80 text-left">
-                      {(["commodity", "market", "district", "state", "arrivalDate", "minimumPrice", "maximumPrice", "modalPrice"] as const).map(col => (
+                      {(["commodity", "market", "district", "state", "arrivalDate", "modalPrice"] as const).map(col => (
                         <th
                           key={col}
                           onClick={() => handleSort(col)}
@@ -566,7 +579,7 @@ export const LiveMandiPrices: React.FC = () => {
                         >
                           {{
                             commodity: "Commodity", market: "Market", district: "District", state: "State",
-                            arrivalDate: "Arrival Date", minimumPrice: "Min Price", maximumPrice: "Max Price", modalPrice: "Modal Price",
+                            arrivalDate: "Arrival Date", modalPrice: "Price (Approx)",
                           }[col]}
                           <SortIcon col={col} />
                         </th>
@@ -590,8 +603,6 @@ export const LiveMandiPrices: React.FC = () => {
                         <td className="px-4 py-3.5 text-slate-500 dark:text-slate-400 whitespace-nowrap">{row.district}</td>
                         <td className="px-4 py-3.5 text-slate-500 dark:text-slate-400 whitespace-nowrap">{row.state}</td>
                         <td className="px-4 py-3.5 text-slate-500 dark:text-slate-400 whitespace-nowrap">{formatDate(row.arrivalDate)}</td>
-                        <td className="px-4 py-3.5 text-slate-600 dark:text-slate-300 font-medium whitespace-nowrap">{formatCurrency(row.minimumPrice)}</td>
-                        <td className="px-4 py-3.5 text-slate-600 dark:text-slate-300 font-medium whitespace-nowrap">{formatCurrency(row.maximumPrice)}</td>
                         <td className="px-4 py-3.5 whitespace-nowrap">
                           <span className="inline-flex items-center px-2.5 py-1 bg-teal-50 dark:bg-teal-900/30 text-teal-700 dark:text-teal-300 rounded-lg font-bold text-sm">
                             {formatCurrency(row.modalPrice)}

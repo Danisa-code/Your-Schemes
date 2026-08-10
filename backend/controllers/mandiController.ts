@@ -24,7 +24,8 @@ export async function getCommodities(req: Request, res: Response) {
       if (!error && data && data.length > 0) {
         // Extract unique sorted commodities
         const unique = Array.from(new Set(data.map((item: any) => item.commodity)));
-        return res.json(unique);
+        const formatted = unique.map((name: string) => ({ id: name.toUpperCase(), name }));
+        return res.json(formatted);
       }
     }
     // Fallback
@@ -134,7 +135,6 @@ export async function getMandi(req: Request, res: Response) {
     const { district, commodity, market, date } = req.query as Record<string, string | undefined>;
 
     if (!supabase) {
-      console.warn("[mandiController] Supabase not connected. Sending mock mandi prices.");
       // Fallback to mock data for development
       const mockResult = await agmarknet.getMandiPrices({ commodity, state: "Tamil Nadu", district, market, date });
       const mapped = (mockResult.data || []).map((item: any) => ({
@@ -145,6 +145,7 @@ export async function getMandi(req: Request, res: Response) {
         min_price: item.minimumPrice,
         max_price: item.maximumPrice,
         modal_price: item.modalPrice,
+        unit: item.unit || "₹/Kg",
         last_updated: mockResult.lastUpdated || new Date().toISOString()
       }));
       return res.json(mapped);
@@ -188,7 +189,8 @@ export async function getMandi(req: Request, res: Response) {
       throw new Error(pricesError.message);
     }
 
-    return res.json(prices || []);
+    const filteredResults = prices || [];
+    return res.json(filteredResults);
   } catch (err: any) {
     console.error("[mandiController] getMandi error:", err);
     res.status(500).json({ error: "Failed to fetch mandi prices", message: err.message });

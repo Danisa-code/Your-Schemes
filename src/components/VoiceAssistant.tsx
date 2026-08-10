@@ -6,26 +6,25 @@
  *   aiResponse — the response text from the parent (App.tsx)
  *   voiceStatus — current recognition status
  *   lang — current app language (passed for initial voice lang sync)
+ *   onLangChange(lang) — callback when user selects a different language
  */
 
 import React, { useState, useEffect, useRef, useCallback } from "react";
 import { motion, AnimatePresence } from "motion/react";
 
-export type VoiceLang = "ta" | "en" | "hi" | "te" | "kn";
+export type VoiceLang = "en" | "ta";
 
 interface VoiceAssistantProps {
   onCommand: (text: string, voiceLang: VoiceLang) => void;
   aiResponse?: string;
   voiceStatus?: "idle" | "listening" | "processing";
   lang?: string;
+  onLangChange?: (lang: VoiceLang) => void;
 }
 
 const LANG_OPTIONS: { value: VoiceLang; label: string; locale: string; flag: string }[] = [
   { value: "ta", label: "தமிழ்", locale: "ta-IN", flag: "🇮🇳" },
   { value: "en", label: "English", locale: "en-IN", flag: "🇬🇧" },
-  { value: "hi", label: "हिंदी", locale: "hi-IN", flag: "🇮🇳" },
-  { value: "te", label: "తెలుగు", locale: "te-IN", flag: "🇮🇳" },
-  { value: "kn", label: "ಕನ್ನಡ", locale: "kn-IN", flag: "🇮🇳" },
 ];
 
 const EXAMPLE_COMMANDS: Record<VoiceLang, string[]> = {
@@ -42,22 +41,6 @@ const EXAMPLE_COMMANDS: Record<VoiceLang, string[]> = {
     "Weather update",
     "Detect crop disease",
     "Apply for Kisan Credit Card",
-  ],
-  hi: [
-    "मंडी भाव दिखाओ",
-    "योजनाएं खोलो",
-    "मौसम की जानकारी",
-    "फसल रोग पहचानो",
-  ],
-  te: [
-    "మండి ధరలు చూపించు",
-    "పథకాలు తెరవండి",
-    "వాతావరణ వార్తలు",
-  ],
-  kn: [
-    "ಮಾರುಕಟ್ಟೆ ಬೆಲೆ ತೋರಿಸು",
-    "ಯೋಜನೆಗಳನ್ನು ತೆರೆ",
-    "ಹವಾಮಾನ ಮಾಹಿತಿ",
   ],
 };
 
@@ -76,27 +59,6 @@ const TITLES: Record<VoiceLang, { title: string; idle: string; listening: string
     processing: "Processing...",
     typeHint: "Type a command",
   },
-  hi: {
-    title: "AI वॉइस असिस्टेंट",
-    idle: "माइक दबाएं",
-    listening: "सुन रहे हैं...",
-    processing: "प्रोसेस हो रहा है...",
-    typeHint: "कमांड टाइप करें",
-  },
-  te: {
-    title: "AI వాయిస్ అసిస్టెంట్",
-    idle: "మాట్లాడటానికి నొక్కండి",
-    listening: "వింటున్నాను...",
-    processing: "ప్రాసెస్ అవుతుంది...",
-    typeHint: "కమాండ్ టైప్ చేయండి",
-  },
-  kn: {
-    title: "AI ಧ್ವನಿ ಸಹಾಯಕ",
-    idle: "ಮಾತನಾಡಲು ಒತ್ತಿ",
-    listening: "ಕೇಳಿಸಿಕೊಳ್ಳುತ್ತಿದ್ದೇನೆ...",
-    processing: "ಪ್ರಕ್ರಿಯೆ ಮಾಡಲಾಗುತ್ತಿದೆ...",
-    typeHint: "ಆದೇಶ ಟೈಪ್ ಮಾಡಿ",
-  },
 };
 
 export const VoiceAssistant: React.FC<VoiceAssistantProps> = ({
@@ -104,11 +66,11 @@ export const VoiceAssistant: React.FC<VoiceAssistantProps> = ({
   aiResponse = "",
   voiceStatus = "idle",
   lang = "ta",
+  onLangChange,
 }) => {
   const [isOpen, setIsOpen] = useState(false);
   const [isMinimized, setIsMinimized] = useState(false);
   const [voiceLang, setVoiceLang] = useState<VoiceLang>(() => {
-    // Default Tamil first; sync from app lang if valid
     const appLang = lang as VoiceLang;
     return LANG_OPTIONS.some(o => o.value === appLang) ? appLang : "ta";
   });
@@ -126,6 +88,13 @@ export const VoiceAssistant: React.FC<VoiceAssistantProps> = ({
   useEffect(() => {
     setLocalStatus(voiceStatus);
   }, [voiceStatus]);
+
+  // Sync voiceLang when lang changes from parent
+  useEffect(() => {
+    if (lang && LANG_OPTIONS.some(o => o.value === lang)) {
+      setVoiceLang(lang as VoiceLang);
+    }
+  }, [lang]);
 
   // Build/update speech recognition whenever voiceLang changes
   useEffect(() => {
@@ -328,7 +297,12 @@ export const VoiceAssistant: React.FC<VoiceAssistantProps> = ({
                     {LANG_OPTIONS.map(opt => (
                       <button
                         key={opt.value}
-                        onClick={() => setVoiceLang(opt.value)}
+                        onClick={() => {
+                          setVoiceLang(opt.value);
+                          if (onLangChange) {
+                            onLangChange(opt.value);
+                          }
+                        }}
                         className={`px-2.5 py-1 rounded-full text-[10px] font-bold transition border cursor-pointer ${
                           voiceLang === opt.value
                             ? "bg-teal-500 text-white border-teal-400"
