@@ -51,9 +51,6 @@ public class SmsServiceImpl implements SmsService {
             case "TWOFACTOR":
                 sendVia2Factor(mobileNumber, otp, formattedMessage);
                 break;
-            case "TWILIO":
-                sendViaTwilio(mobileNumber, formattedMessage);
-                break;
             case "MOCK":
             default:
                 log.info("[SMS MOCK SERVICE] Provider: MOCK | Mobile: [REDACTED] | Message: {}", formattedMessage);
@@ -100,29 +97,5 @@ public class SmsServiceImpl implements SmsService {
         ResponseEntity<String> response = restTemplate.getForEntity(URI.create(url), String.class);
         log.info("2Factor API response status: {}", response.getStatusCode());
     }
-
-    private void sendViaTwilio(String mobileNumber, String message) throws Exception {
-        if (apiKey == null || apiKey.isBlank() || authKey == null || authKey.isBlank()) {
-            log.warn("Twilio API/Auth credentials missing. Falling back to local logging mode.");
-            log.info("[Twilio MOCK] Message: {}", message);
-            return;
-        }
-
-        String accountSid = apiKey;
-        String authToken = authKey;
-        String url = "https://api.twilio.com/2010-04-01/Accounts/" + accountSid + "/Messages.json";
-
-        HttpHeaders headers = new HttpHeaders();
-        headers.setBasicAuth(accountSid, authToken);
-        headers.setContentType(MediaType.APPLICATION_FORM_URLENCODED);
-
-        String requestBody = "From=" + URLEncoder.encode(senderId, StandardCharsets.UTF_8)
-                + "&To=" + URLEncoder.encode(mobileNumber, StandardCharsets.UTF_8)
-                + "&Body=" + URLEncoder.encode(message, StandardCharsets.UTF_8);
-
-        HttpEntity<String> entity = new HttpEntity<>(requestBody, headers);
-        ResponseEntity<String> response = restTemplate.postForEntity(URI.create(url), entity, String.class);
-
-        log.info("Twilio API response status: {}", response.getStatusCode());
-    }
 }
+

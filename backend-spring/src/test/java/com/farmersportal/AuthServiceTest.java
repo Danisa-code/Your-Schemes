@@ -2,20 +2,24 @@ package com.farmersportal;
 
 import com.farmersportal.dto.*;
 import com.farmersportal.entity.MobileOtpVerification;
-import com.farmersportal.entity.User;
 import com.farmersportal.repository.MobileOtpVerificationRepository;
 import com.farmersportal.repository.UserRepository;
 import com.farmersportal.service.AuthService;
+import com.farmersportal.service.WpSmsService;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
+import org.mockito.Mockito;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.context.SpringBootTest;
+import org.springframework.test.context.bean.override.mockito.MockitoBean;
 import org.springframework.transaction.annotation.Transactional;
 
 import java.time.LocalDateTime;
 
 import static org.junit.jupiter.api.Assertions.*;
+import static org.mockito.ArgumentMatchers.anyString;
+import static org.mockito.ArgumentMatchers.eq;
 
 @SpringBootTest
 @Transactional
@@ -30,10 +34,16 @@ class AuthServiceTest {
     @Autowired
     private UserRepository userRepository;
 
+    @MockitoBean
+    private WpSmsService wpSmsService;
+
     @BeforeEach
     void setUp() {
         mobileOtpVerificationRepository.deleteAll();
         userRepository.deleteAll();
+
+        // Default mock behavior for WP-SMS Service
+        Mockito.when(wpSmsService.sendOtp(anyString(), anyString(), anyString())).thenReturn(true);
     }
 
     @Test
@@ -44,6 +54,7 @@ class AuthServiceTest {
 
         assertTrue(response.isSuccess());
         assertEquals("OTP sent successfully", response.getMessage());
+        assertNotNull(response.getVerificationId());
 
         MobileOtpVerification otpRecord = mobileOtpVerificationRepository.findTopByMobileNumberOrderByCreatedAtDesc("+919876543210").orElseThrow();
         assertNotNull(otpRecord.getHashedOtp());
@@ -63,9 +74,9 @@ class AuthServiceTest {
     @DisplayName("Test 3: Incorrect Mobile OTP verification fails with Tamil error")
     void testVerifyIncorrectMobileOtp() {
         String mobile = "+919876543211";
-        authService.sendOtp(new SendOtpRequest(mobile), "127.0.0.1");
+        SendOtpResponse sendResp = authService.sendOtp(new SendOtpRequest(mobile), "127.0.0.1");
 
-        VerifyOtpRequest verifyReq = new VerifyOtpRequest(mobile, "000000");
+        VerifyOtpRequest verifyReq = new VerifyOtpRequest(mobile, "000000", sendResp.getVerificationId());
         VerifyOtpResponse response = authService.verifyOtp(verifyReq, "127.0.0.1");
 
         assertFalse(response.isSuccess());
@@ -76,13 +87,13 @@ class AuthServiceTest {
     @DisplayName("Test 4: Expired Mobile OTP rejection")
     void testExpiredMobileOtpRejection() {
         String mobile = "+919876543212";
-        authService.sendOtp(new SendOtpRequest(mobile), "127.0.0.1");
+        SendOtpResponse sendResp = authService.sendOtp(new SendOtpRequest(mobile), "127.0.0.1");
 
         MobileOtpVerification otpRecord = mobileOtpVerificationRepository.findTopByMobileNumberOrderByCreatedAtDesc(mobile).orElseThrow();
         otpRecord.setExpiresAt(LocalDateTime.now().minusMinutes(10));
         mobileOtpVerificationRepository.save(otpRecord);
 
-        VerifyOtpResponse response = authService.verifyOtp(new VerifyOtpRequest(mobile, "123456"), "127.0.0.1");
+        VerifyOtpResponse response = authService.verifyOtp(new VerifyOtpRequest(mobile, "555555", sendResp.getVerificationId()), "127.0.0.1");
         assertFalse(response.isSuccess());
         assertEquals("OTP காலாவதியாகிவிட்டது. புதிய OTP பெறவும்.", response.getMessage());
     }
@@ -91,9 +102,9 @@ class AuthServiceTest {
     @DisplayName("Test 5: Maximum verification attempts (5 attempts) lockout")
     void testMaxVerificationAttemptsLockout() {
         String mobile = "+919876543213";
-        authService.sendOtp(new SendOtpRequest(mobile), "127.0.0.1");
+        SendOtpResponse sendResp = authService.sendOtp(new SendOtpRequest(mobile), "127.0.0.1");
 
-        VerifyOtpRequest verifyReq = new VerifyOtpRequest(mobile, "111111");
+        VerifyOtpRequest verifyReq = new VerifyOtpRequest(mobile, "111111", sendResp.getVerificationId());
 
         // Fail 5 times
         for (int i = 0; i < 5; i++) {
@@ -151,15 +162,10 @@ class AuthServiceTest {
     void testNewVsExistingFarmerFlows() {
         String mobile = "9876543216";
         String normalized = "+919876543216";
-        authService.sendOtp(new SendOtpRequest(mobile), "127.0.0.1");
-
-        MobileOtpVerification otpRecord = mobileOtpVerificationRepository.findTopByMobileNumberOrderByCreatedAtDesc(normalized).orElseThrow();
-        String dummyOtp = "555555";
-        otpRecord.setHashedOtp(hashDummyOtp(dummyOtp, normalized));
-        mobileOtpVerificationRepository.save(otpRecord);
+        SendOtpResponse sendResp = authService.sendOtp(new SendOtpRequest(mobile), "127.0.0.1");
 
         // Verify OTP - should return isNewUser = true since it's the first time
-        VerifyOtpResponse responseNew = authService.verifyOtp(new VerifyOtpRequest(mobile, dummyOtp), "127.0.0.1");
+        VerifyOtpResponse responseNew = authService.verifyOtp(new VerifyOtpRequest(mobile, "555555", sendResp.getVerificationId()), "127.0.0.1");
         assertTrue(responseNew.isSuccess());
         assertTrue(responseNew.isNewUser());
         assertNotNull(responseNew.getToken());
@@ -176,35 +182,17 @@ class AuthServiceTest {
         authService.saveProfile(profileDto);
 
         // Fast forward the cooldown for the first OTP record
+        MobileOtpVerification otpRecord = mobileOtpVerificationRepository.findTopByMobileNumberOrderByCreatedAtDesc(normalized).orElseThrow();
         otpRecord.setLastResendAt(LocalDateTime.now().minusSeconds(100));
         mobileOtpVerificationRepository.save(otpRecord);
 
         // Generate a new OTP request for the existing user
-        authService.sendOtp(new SendOtpRequest(mobile), "127.0.0.1");
-        MobileOtpVerification otpRecordExisting = mobileOtpVerificationRepository.findTopByMobileNumberOrderByCreatedAtDesc(normalized).orElseThrow();
-        otpRecordExisting.setHashedOtp(hashDummyOtp(dummyOtp, normalized));
-        mobileOtpVerificationRepository.save(otpRecordExisting);
+        SendOtpResponse sendResp2 = authService.sendOtp(new SendOtpRequest(mobile), "127.0.0.1");
 
         // Verify OTP again - should return isNewUser = false since registration is complete
-        VerifyOtpResponse responseExisting = authService.verifyOtp(new VerifyOtpRequest(mobile, dummyOtp), "127.0.0.1");
+        VerifyOtpResponse responseExisting = authService.verifyOtp(new VerifyOtpRequest(mobile, "555555", sendResp2.getVerificationId()), "127.0.0.1");
         assertTrue(responseExisting.isSuccess());
         assertFalse(responseExisting.isNewUser());
     }
-
-    private String hashDummyOtp(String otp, String target) {
-        try {
-            java.security.MessageDigest digest = java.security.MessageDigest.getInstance("SHA-256");
-            String salt = "TN_FARMER_PORTAL_SALT_" + target.toLowerCase().trim();
-            byte[] hash = digest.digest((salt + ":" + otp).getBytes(java.nio.charset.StandardCharsets.UTF_8));
-            StringBuilder hexString = new StringBuilder();
-            for (byte b : hash) {
-                String hex = Integer.toHexString(0xff & b);
-                if (hex.length() == 1) hexString.append('0');
-                hexString.append(hex);
-            }
-            return hexString.toString();
-        } catch (Exception e) {
-            throw new RuntimeException(e);
-        }
-    }
 }
+

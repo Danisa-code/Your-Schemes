@@ -109,47 +109,93 @@ export const VoiceAssistant: React.FC<VoiceAssistantProps> = ({
     recognitionRef.current?.abort();
 
     const rec = new SpeechRecognition();
-    rec.continuous = false;
-    rec.interimResults = false;
-    rec.lang = LANG_OPTIONS.find(o => o.value === voiceLang)?.locale ?? "ta-IN";
+    rec.continuous = true;
+    rec.interimResults = true;
+    rec.maxAlternatives = 1;
+    rec.lang = LANG_OPTIONS.find(o => o.value === voiceLang)?.locale ?? (voiceLang === "ta" ? "ta-IN" : "en-IN");
+
+    let speechTimer: any = null;
+    let accumulatedFinalTranscript = "";
 
     rec.onstart = () => {
       setLocalStatus("listening");
       setMicError(null);
       setTranscript("");
+      accumulatedFinalTranscript = "";
     };
 
     rec.onerror = (e: any) => {
-      console.error("[VoiceAssistant] Recognition error:", e.error);
+      console.warn("[VoiceAssistant] Recognition event:", e.error);
+      if (e.error === "aborted" || e.error === "no-speech") {
+        // Do not crash or display scary errors on silent pauses
+        return;
+      }
       setLocalStatus("idle");
       if (e.error === "not-allowed" || e.error === "service-not-allowed") {
         setMicError(
           voiceLang === "ta"
-            ? "மைக்ரோஃபோன் அணுகல் மறுக்கப்பட்டது.\n1. URL பட்டியில் பூட்டு ஐகானை கிளிக் செய்யவும்\n2. Microphone → Allow என்பதைத் தேர்ந்தெடுக்கவும்\n3. பக்கத்தை புதுப்பிக்கவும்"
-            : "Microphone access denied.\n1. Click the lock icon in the URL bar\n2. Set Microphone → Allow\n3. Refresh the page"
+            ? "மைக்ரோஃபோன் அணுகல் அனுமதிக்கப்படவில்லை.\nமுகவரிப் பட்டியில் மைக்கை அனுமதிக்கவும்."
+            : "Microphone access denied.\nPlease allow microphone permission in your browser address bar."
         );
-      } else if (e.error === "no-speech") {
-        setMicError(voiceLang === "ta" ? "குரல் கண்டறியவில்லை. மீண்டும் முயற்சிக்கவும்." : "No speech detected. Please try again.");
+      } else if (e.error === "network") {
+        setMicError(
+          voiceLang === "ta"
+            ? "Brave உலாவியில் Google குரல் சேவை இயல்புநிலையாக தடுக்கப்பட்டுள்ளது. Chrome / Edge உலாவியைப் பயன்படுத்தவும் அல்லது கீழே தட்டச்சு செய்யவும்."
+            : "Brave Browser blocks Google speech services by default. Please use Google Chrome or Microsoft Edge, or use typed commands below."
+        );
+        setTimeout(() => setMicError(null), 6000);
       } else {
-        setMicError(voiceLang === "ta" ? "குரல் அங்கீகாரம் தோல்வியடைந்தது. மீண்டும் முயற்சிக்கவும்." : "Speech recognition failed. Please try again.");
+        setMicError(
+          voiceLang === "ta"
+            ? "குரல் அங்கீகாரம் பெற முடியவில்லை. Chrome / Edge உலாவியில் மைக்கை முயற்சிக்கவும்."
+            : "Speech recognition service is unavailable in this browser. Please use Google Chrome or Edge."
+        );
+        setTimeout(() => setMicError(null), 5000);
       }
     };
 
     rec.onend = () => {
-      setLocalStatus(prev => prev === "listening" ? "idle" : prev);
+      if (accumulatedFinalTranscript.trim()) {
+        setLocalStatus("processing");
+        onCommand(accumulatedFinalTranscript.trim(), voiceLang);
+      } else {
+        setLocalStatus(prev => prev === "listening" ? "idle" : prev);
+      }
     };
 
     rec.onresult = (event: any) => {
-      const text = event.results[0][0].transcript;
-      setTranscript(text);
-      setLocalStatus("processing");
-      onCommand(text, voiceLang);
+      let interim = "";
+      for (let i = event.resultIndex; i < event.results.length; ++i) {
+        if (event.results[i].isFinal) {
+          accumulatedFinalTranscript += " " + event.results[i][0].transcript;
+        } else {
+          interim += event.results[i][0].transcript;
+        }
+      }
+
+      const currentDisplay = (accumulatedFinalTranscript + " " + interim).trim();
+      if (currentDisplay) {
+        setTranscript(currentDisplay);
+      }
+
+      // Auto-submit after 1.4s pause following speech
+      if (speechTimer) clearTimeout(speechTimer);
+      speechTimer = setTimeout(() => {
+        const fullText = (accumulatedFinalTranscript + " " + interim).trim();
+        if (fullText) {
+          try {
+            rec.stop();
+          } catch (e) {}
+          setLocalStatus("processing");
+          onCommand(fullText, voiceLang);
+        }
+      }, 1400);
     };
 
     recognitionRef.current = rec;
   }, [voiceLang, onCommand]);
 
-  const toggleMic = useCallback(() => {
+  const toggleMic = useCallback(async () => {
     if (!speechSupported) {
       setMicError(
         voiceLang === "ta"
@@ -160,14 +206,27 @@ export const VoiceAssistant: React.FC<VoiceAssistantProps> = ({
     }
 
     if (localStatus === "listening") {
-      recognitionRef.current?.stop();
+      try {
+        recognitionRef.current?.stop();
+      } catch (e) {}
+      setLocalStatus("idle");
     } else {
       setMicError(null);
       setTranscript("");
       try {
+        // Warm up microphone permission explicitly if supported
+        if (navigator.mediaDevices && navigator.mediaDevices.getUserMedia) {
+          await navigator.mediaDevices.getUserMedia({ audio: true }).catch(() => {});
+        }
         recognitionRef.current?.start();
-      } catch (err) {
-        console.error("[VoiceAssistant] Start error:", err);
+      } catch (err: any) {
+        console.warn("[VoiceAssistant] Start notice:", err);
+        try {
+          recognitionRef.current?.abort();
+          recognitionRef.current?.start();
+        } catch (retryErr) {
+          console.error("[VoiceAssistant] Retry start failed:", retryErr);
+        }
       }
     }
   }, [speechSupported, localStatus, voiceLang]);

@@ -1,249 +1,187 @@
-/**
- * Mandi Controller — Express route handlers for all mandi-related endpoints.
- * Handles fetching live price data from Supabase with graceful fallback to mocks.
- */
-
 import { Request, Response } from "express";
-import * as agmarknet from "../services/agmarknetService.js";
-import { supabase } from "../config/supabase.js";
-import { runScraper } from "../scraper/scraper.js";
+import { agmarknetService } from "../services/agmarknetService";
+import { TN_DISTRICTS } from "../scraper/districtMarketMap";
 
-// Helper to get IST date string
-function getISTDateString() {
-  return new Date(new Date().getTime() + 5.5 * 60 * 60 * 1000).toISOString().split('T')[0];
-}
-
-export async function getCommodities(req: Request, res: Response) {
+/**
+ * GET /api/mandi-prices
+ * Query parameters: commodity, district, market, refresh
+ */
+export async function getMandiPrices(req: Request, res: Response): Promise<void> {
   try {
-    if (supabase) {
-      const { data, error } = await supabase
-        .from("mandi_prices")
-        .select("commodity")
-        .order("commodity", { ascending: true });
+    const commodity = req.query.commodity as string | undefined;
+    const district = req.query.district as string | undefined;
+    const market = req.query.market as string | undefined;
+    const refresh = req.query.refresh === "true";
 
-      if (!error && data && data.length > 0) {
-        // Extract unique sorted commodities
-        const unique = Array.from(new Set(data.map((item: any) => item.commodity)));
-        const formatted = unique.map((name: string) => ({ id: name.toUpperCase(), name }));
-        return res.json(formatted);
-      }
-    }
-    // Fallback
-    const data = await agmarknet.getCommodities();
-    res.json(data);
-  } catch (err) {
-    console.error("[mandiController] getCommodities error:", err);
-    res.status(500).json({ error: "Failed to fetch commodities", message: "Please try again later." });
-  }
-}
+    console.log(`[MandiController] GET /api/mandi-prices - Commodity: "${commodity || 'All'}", District: "${district || 'All'}", Market: "${market || 'All'}"`);
 
-export async function getStates(req: Request, res: Response) {
-  try {
-    // This portal is Tamil Nadu-specific — only return Tamil Nadu
-    res.json(["Tamil Nadu"]);
-  } catch (err) {
-    console.error("[mandiController] getStates error:", err);
-    res.status(500).json({ error: "Failed to fetch states", message: "Please try again later." });
-  }
-}
+    // Fetch all cached/live records from official source
+    const allRecords = await agmarknetService.getMandiPrices(refresh);
+    console.log(`[MandiController] Official records in database/cache: ${allRecords.length}`);
 
-export async function getDistricts(req: Request, res: Response) {
-  try {
-    const { state } = req.query;
-    if (!state || typeof state !== "string") {
-      return res.status(400).json({ error: "Query parameter 'state' is required." });
-    }
+    // Apply filtering with alias normalization
+    const filteredRecords = agmarknetService.filterRecords(allRecords, commodity, district, market);
+    console.log(`[MandiController] Records matching filters: ${filteredRecords.length}`);
 
-    if (state.toLowerCase() === "tamil nadu" && supabase) {
-      const { data, error } = await supabase
-        .from("mandi_prices")
-        .select("district")
-        .order("district", { ascending: true });
-
-      if (!error && data && data.length > 0) {
-        const unique = Array.from(new Set(data.map((item: any) => item.district)));
-        return res.json(unique);
-      }
-    }
-
-    // Fallback
-    const data = await agmarknet.getDistricts(state);
-    res.json(data);
-  } catch (err) {
-    console.error("[mandiController] getDistricts error:", err);
-    res.status(500).json({ error: "Failed to fetch districts", message: "Please try again later." });
-  }
-}
-
-export async function getMarkets(req: Request, res: Response) {
-  try {
-    const { district } = req.query;
-    if (!district || typeof district !== "string") {
-      return res.status(400).json({ error: "Query parameter 'district' is required." });
-    }
-
-    if (supabase) {
-      const { data, error } = await supabase
-        .from("mandi_prices")
-        .select("market")
-        .eq("district", district)
-        .order("market", { ascending: true });
-
-      if (!error && data && data.length > 0) {
-        const unique = Array.from(new Set(data.map((item: any) => item.market)));
-        return res.json(unique);
-      }
-    }
-
-    // Fallback
-    const data = await agmarknet.getMarkets(district);
-    res.json(data);
-  } catch (err) {
-    console.error("[mandiController] getMarkets error:", err);
-    res.status(500).json({ error: "Failed to fetch markets", message: "Please try again later." });
-  }
-}
-
-export async function getMandiPrices(req: Request, res: Response) {
-  try {
-    const { commodity, state, district, market, date } = req.query as Record<string, string | undefined>;
-    const result = await agmarknet.getMandiPrices({ commodity, state, district, market, date });
-    res.json(result);
-  } catch (err) {
-    console.error("[mandiController] getMandiPrices error:", err);
-    res.status(500).json({ error: "Failed to fetch mandi prices", message: "AGMARKNET may be temporarily unavailable. Please try again in a few minutes." });
-  }
-}
-
-export async function getHistory(req: Request, res: Response) {
-  try {
-    const { commodity, market } = req.query as Record<string, string | undefined>;
-    if (!commodity || !market) {
-      return res.status(400).json({ error: "Query parameters 'commodity' and 'market' are required." });
-    }
-    const data = await agmarknet.getHistory({ commodity, market });
-    res.json(data);
-  } catch (err) {
-    console.error("[mandiController] getHistory error:", err);
-    res.status(500).json({ error: "Failed to fetch price history", message: "Please try again later." });
-  }
-}
-
-// GET /api/mandi — Returns today's prices (or fallback to latest available day if today has no data).
-export async function getMandi(req: Request, res: Response) {
-  try {
-    const { district, commodity, market, date } = req.query as Record<string, string | undefined>;
-
-    if (!supabase) {
-      // Fallback to mock data for development
-      const mockResult = await agmarknet.getMandiPrices({ commodity, state: "Tamil Nadu", district, market, date });
-      const mapped = (mockResult.data || []).map((item: any) => ({
-        commodity: item.commodity,
-        market: item.market,
-        district: item.district,
-        arrival_date: item.arrivalDate,
-        min_price: item.minimumPrice,
-        max_price: item.maximumPrice,
-        modal_price: item.modalPrice,
-        unit: item.unit || "₹/Kg",
-        last_updated: mockResult.lastUpdated || new Date().toISOString()
-      }));
-      return res.json(mapped);
-    }
-
-    let targetDate = date;
-
-    // If no specific date is queried, determine the latest date available in DB
-    if (!targetDate) {
-      const { data: dateData, error: dateError } = await supabase
-        .from("mandi_prices")
-        .select("arrival_date")
-        .order("arrival_date", { ascending: false })
-        .limit(1);
-
-      if (!dateError && dateData && dateData.length > 0) {
-        targetDate = dateData[0].arrival_date;
-      } else {
-        targetDate = getISTDateString();
-      }
-    }
-
-    let query = supabase
-      .from("mandi_prices")
-      .select("*")
-      .eq("arrival_date", targetDate);
-
-    if (district) {
-      query = query.eq("district", district);
-    }
-    if (commodity) {
-      query = query.eq("commodity", commodity);
-    }
-    if (market) {
-      query = query.eq("market", market);
-    }
-
-    const { data: prices, error: pricesError } = await query.order("commodity", { ascending: true });
-
-    if (pricesError) {
-      throw new Error(pricesError.message);
-    }
-
-    const filteredResults = prices || [];
-    return res.json(filteredResults);
-  } catch (err: any) {
-    console.error("[mandiController] getMandi error:", err);
-    res.status(500).json({ error: "Failed to fetch mandi prices", message: err.message });
-  }
-}
-
-// GET /api/scraper-stats — Returns recent logs from the scraper_logs table
-export async function getScraperStats(req: Request, res: Response) {
-  try {
-    if (!supabase) {
-      // Return mock logs for development
-      return res.json([
-        {
-          id: "mock-1",
-          run_time: new Date().toISOString(),
-          rows_inserted: 125,
-          rows_updated: 40,
-          rows_failed: 0,
-          status: "SUCCESS",
-          errors: null,
-          next_run: new Date(Date.now() + 4 * 60 * 60 * 1000).toISOString()
-        }
-      ]);
-    }
-
-    const { data: logs, error } = await supabase
-      .from("scraper_logs")
-      .select("*")
-      .order("run_time", { ascending: false })
-      .limit(30);
-
-    if (error) {
-      throw new Error(error.message);
-    }
-
-    res.json(logs || []);
-  } catch (err: any) {
-    console.error("[mandiController] getScraperStats error:", err);
-    res.status(500).json({ error: "Failed to fetch scraper metrics", message: err.message });
-  }
-}
-
-// POST /api/scraper-trigger — trigger manual scraper run in background
-export async function triggerScraperRun(req: Request, res: Response) {
-  try {
-    console.log("[mandiController] Manual scraper trigger requested...");
-    // Trigger scraper run asynchronously in the background
-    runScraper().catch(err => {
-      console.error("[mandiController] Background manual scraper run error:", err);
+    res.json({
+      success: true,
+      total: filteredRecords.length,
+      totalAvailable: allRecords.length,
+      source: "Department of Agricultural Marketing and Agri Business, Government of Tamil Nadu",
+      data: filteredRecords
     });
-    res.json({ message: "Mandi price scraper run triggered successfully in the background." });
-  } catch (err: any) {
-    console.error("[mandiController] triggerScraperRun error:", err);
-    res.status(500).json({ error: "Failed to manually trigger scraper", message: err.message });
+  } catch (error: any) {
+    console.error("[MandiController] Error in getMandiPrices:", error);
+    res.status(500).json({
+      success: false,
+      error: "Official Tamil Nadu mandi price data is temporarily unavailable.",
+      details: error.message
+    });
+  }
+}
+
+/**
+ * GET /api/commodities
+ * Returns unique list of commodities with price summaries
+ */
+export async function getCommodities(req: Request, res: Response): Promise<void> {
+  try {
+    const records = await agmarknetService.getMandiPrices();
+    const commodities = agmarknetService.getCommodityList(records);
+
+    res.json({
+      success: true,
+      total: commodities.length,
+      data: commodities
+    });
+  } catch (error: any) {
+    console.error("[MandiController] Error in getCommodities:", error);
+    res.status(500).json({
+      success: false,
+      error: "Failed to load commodities from official source.",
+      details: error.message
+    });
+  }
+}
+
+/**
+ * GET /api/states
+ */
+export async function getStates(req: Request, res: Response): Promise<void> {
+  res.json(["Tamil Nadu"]);
+}
+
+/**
+ * GET /api/districts
+ * Returns all 38 Tamil Nadu districts
+ */
+export async function getDistricts(req: Request, res: Response): Promise<void> {
+  try {
+    res.json({
+      success: true,
+      total: TN_DISTRICTS.length,
+      data: TN_DISTRICTS
+    });
+  } catch (error: any) {
+    console.error("[MandiController] Error in getDistricts:", error);
+    res.status(500).json({
+      success: false,
+      error: "Failed to fetch districts.",
+      details: error.message
+    });
+  }
+}
+
+/**
+ * GET /api/markets
+ * Returns unique list of markets
+ */
+export async function getMarkets(req: Request, res: Response): Promise<void> {
+  try {
+    const district = req.query.district as string | undefined;
+    const records = await agmarknetService.getMandiPrices();
+
+    let filtered = records;
+    if (district && district.toLowerCase() !== "all") {
+      filtered = records.filter(r => r.district.toLowerCase().includes(district.toLowerCase()));
+    }
+
+    const markets = Array.from(new Set(filtered.map(r => r.market))).sort();
+
+    res.json({
+      success: true,
+      total: markets.length,
+      data: markets
+    });
+  } catch (error: any) {
+    console.error("[MandiController] Error in getMarkets:", error);
+    res.status(500).json({
+      success: false,
+      error: "Failed to fetch markets.",
+      details: error.message
+    });
+  }
+}
+
+/**
+ * GET /api/mandi
+ * Alias for live mandi prices
+ */
+export async function getMandi(req: Request, res: Response): Promise<void> {
+  return getMandiPrices(req, res);
+}
+
+/**
+ * GET /api/history
+ * Returns historical records for a commodity
+ */
+export async function getHistory(req: Request, res: Response): Promise<void> {
+  try {
+    const commodity = (req.query.commodity as string) || "Tomato";
+    const market = req.query.market as string | undefined;
+
+    const allRecords = await agmarknetService.getMandiPrices();
+    const filtered = agmarknetService.filterRecords(allRecords, commodity, undefined, market);
+
+    const historyPoints = filtered.slice(0, 30).map((r) => ({
+      date: r.arrivalDate,
+      modalPrice: r.modalPrice,
+      minPrice: r.minimumPrice,
+      maxPrice: r.maximumPrice,
+    }));
+
+    res.json(historyPoints);
+  } catch (error: any) {
+    console.error("[MandiController] Error in getHistory:", error);
+    res.status(500).json({
+      success: false,
+      error: "Failed to fetch commodity history.",
+      details: error.message
+    });
+  }
+}
+
+/**
+ * GET /api/scraper-stats
+ */
+export async function getScraperStats(req: Request, res: Response): Promise<void> {
+  res.json([
+    {
+      source: "Department of Agricultural Marketing and Agri Business, Govt. of Tamil Nadu",
+      status: "ACTIVE",
+      lastCheck: new Date().toISOString()
+    }
+  ]);
+}
+
+/**
+ * POST /api/scraper-trigger
+ */
+export async function triggerScraperRun(req: Request, res: Response): Promise<void> {
+  try {
+    await agmarknetService.getMandiPrices(true);
+    res.json({ success: true, message: "Mandi prices refreshed from official Tamil Nadu Government source." });
+  } catch (error: any) {
+    res.status(500).json({ success: false, error: error.message });
   }
 }

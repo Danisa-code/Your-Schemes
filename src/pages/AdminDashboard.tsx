@@ -1,6 +1,7 @@
 // AdminDashboard.tsx
 import React, { useState, useEffect } from "react";
 import { marketApi } from "../services/marketApi";
+import { SchemeUrlAdminPanel } from "../components/SchemeUrlAdminPanel";
 
 interface ScraperLog {
   id: string;
@@ -18,6 +19,7 @@ interface AdminDashboardProps {
 }
 
 export function AdminDashboard({ onBack }: AdminDashboardProps) {
+  const [activeTab, setActiveTab] = useState<"schemes" | "scraper">("schemes");
   const [logs, setLogs] = useState<ScraperLog[]>([]);
   const [isLoading, setIsLoading] = useState(true);
   const [isTriggering, setIsTriggering] = useState(false);
@@ -152,8 +154,40 @@ export function AdminDashboard({ onBack }: AdminDashboardProps) {
         </div>
       )}
 
-      {/* Metrics Grid */}
-      <div className="grid grid-cols-1 md:grid-cols-4 gap-6">
+      {/* Navigation Tabs */}
+      <div className="flex gap-3 border-b border-slate-200 dark:border-slate-800 pb-2">
+        <button
+          onClick={() => setActiveTab("schemes")}
+          className={`px-5 py-2.5 rounded-xl font-bold text-xs transition cursor-pointer flex items-center gap-2 ${
+            activeTab === "schemes"
+              ? "bg-[#0F5238] text-white shadow-md"
+              : "bg-slate-100 dark:bg-slate-800 text-slate-600 dark:text-slate-300 hover:bg-slate-200"
+          }`}
+        >
+          <span className="material-symbols-outlined text-base">link</span>
+          <span>Scheme Links & Verification</span>
+        </button>
+        <button
+          onClick={() => setActiveTab("scraper")}
+          className={`px-5 py-2.5 rounded-xl font-bold text-xs transition cursor-pointer flex items-center gap-2 ${
+            activeTab === "scraper"
+              ? "bg-[#0F5238] text-white shadow-md"
+              : "bg-slate-100 dark:bg-slate-800 text-slate-600 dark:text-slate-300 hover:bg-slate-200"
+          }`}
+        >
+          <span className="material-symbols-outlined text-base">monitoring</span>
+          <span>Mandi Scraper Logs</span>
+        </button>
+      </div>
+
+      {/* TAB CONTENT 1: SCHEME LINKS MANAGEMENT */}
+      {activeTab === "schemes" && <SchemeUrlAdminPanel />}
+
+      {/* TAB CONTENT 2: SCRAPER LOGS */}
+      {activeTab === "scraper" && (
+        <div className="space-y-8">
+          {/* Metrics Grid */}
+          <div className="grid grid-cols-1 md:grid-cols-4 gap-6">
         <div className="bg-white dark:bg-slate-900 p-6 rounded-2xl border border-slate-100 dark:border-slate-800 shadow-sm flex items-center gap-4">
           <div className="p-3 bg-emerald-50 dark:bg-emerald-950/30 text-[#0F5238] rounded-xl">
             <span className="material-symbols-outlined text-2xl">check_circle</span>
@@ -275,6 +309,8 @@ export function AdminDashboard({ onBack }: AdminDashboardProps) {
           </div>
         )}
       </div>
+      </div>
+      )}
 
       {/* Error Details Modal */}
       {activeErrorLog && (

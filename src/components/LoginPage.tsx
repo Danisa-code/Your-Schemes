@@ -3,21 +3,28 @@ import { motion, AnimatePresence, useMotionValue, useSpring, useTransform } from
 import { User, Mail, Check, ShieldAlert, ArrowRight, Loader2, Globe, Lock } from "lucide-react";
 import { useAuth } from "../context/AuthContext";
 
+import { MobileOtpLogin } from "./auth/MobileOtpLogin";
+
 interface LoginPageProps {
   onLoginSuccess: (username: string, email: string) => void;
   mode?: "login" | "reset-password";
 }
 
 export function LoginPage({ onLoginSuccess, mode = "login" }: LoginPageProps) {
-  // Supabase Auth Context
-  const {
-    loginWithOTP,
-    verifyOTP,
-    loginWithPassword,
-    signUpWithPassword,
-    loginWithGoogle,
-    forgotPassword,
-  } = useAuth();
+  if (mode !== "reset-password") {
+    return (
+      <MobileOtpLogin
+        onLoginSuccess={(farmerProfile) => {
+          onLoginSuccess(farmerProfile?.name || "Farmer", farmerProfile?.phone || "");
+        }}
+      />
+    );
+  }
+
+  // Note: reset-password flow is no longer available with Firebase Phone Auth.
+  // This branch is unreachable since App.tsx removed the /reset-password route.
+  // Keeping a minimal stub to avoid unused variable errors.
+  const _auth = useAuth();
 
   // Check if environment variables are still default placeholders
   const isPlaceholder = !import.meta.env.VITE_SUPABASE_URL ||
@@ -231,8 +238,7 @@ export function LoginPage({ onLoginSuccess, mode = "login" }: LoginPageProps) {
     console.log(`[LoginPage] Initiating OTP send for email: ${email}`);
 
     try {
-      const { error } = await loginWithOTP(email, username);
-      if (error) throw error;
+      throw new Error("Email/OTP auth has been replaced by Firebase Phone Auth.");
 
       setLoginStep("otp");
       showToast("OTP email sent successfully!", "success");
@@ -255,7 +261,7 @@ export function LoginPage({ onLoginSuccess, mode = "login" }: LoginPageProps) {
     console.log(`[LoginPage] Initiating OTP verification for email: ${email}, code: ${otpCode}`);
 
     try {
-      const { session, error } = await verifyOTP(email, otpCode);
+      const { session, error } = { session: null, error: new Error("Firebase Phone Auth only.") }; await Promise.resolve();
       if (error) throw error;
 
       setOtpError(false);
@@ -291,7 +297,7 @@ export function LoginPage({ onLoginSuccess, mode = "login" }: LoginPageProps) {
     console.log(`[LoginPage] Initiating password login for: ${email}`);
 
     try {
-      const { session, error } = await loginWithPassword(email, password);
+      const { session, error } = { session: null, error: new Error("Firebase Phone Auth only.") }; await Promise.resolve();
       if (error) throw error;
 
       setIsSuccess(true);
@@ -325,7 +331,7 @@ export function LoginPage({ onLoginSuccess, mode = "login" }: LoginPageProps) {
     console.log(`[LoginPage] Initiating registration for: ${email}`);
 
     try {
-      const { error } = await signUpWithPassword(email, password, username);
+      const { error } = { error: new Error("Firebase Phone Auth only.") }; await Promise.resolve();
       if (error) throw error;
 
       showToast("Check your email for a verification link!", "success");
@@ -355,7 +361,7 @@ export function LoginPage({ onLoginSuccess, mode = "login" }: LoginPageProps) {
     console.log(`[LoginPage] Initiating forgot password link request for: ${email}`);
 
     try {
-      const { error } = await forgotPassword(email);
+      const { error } = { error: new Error("Firebase Phone Auth only.") }; await Promise.resolve();
       if (error) throw error;
 
       showToast("Password reset link sent!", "success");
@@ -380,7 +386,7 @@ export function LoginPage({ onLoginSuccess, mode = "login" }: LoginPageProps) {
     setIsSubmitting(true);
     console.log("[LoginPage] Triggering Google OAuth connection redirect...");
     try {
-      await loginWithGoogle();
+      throw new Error("Firebase Phone Auth only.");
     } catch (err) {
       handleAuthError(err);
       setIsSubmitting(false);

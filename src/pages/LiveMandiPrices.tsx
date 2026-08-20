@@ -24,14 +24,26 @@ const formatDate = (iso: string) => {
 };
 
 function downloadCSV(data: MandiPrice[]) {
-  const headers = ["Commodity", "Market", "District", "State", "Arrival Date", "Price (Approx)", "Unit"];
-  const rows = data.map(r => [r.commodity, r.market, r.district, r.state, r.arrivalDate, r.modalPrice, r.unit]);
+  const headers = ["Commodity", "Variety", "Market", "District", "State", "Arrival Date", "Min Price", "Max Price", "Modal Price", "Unit", "Official Source"];
+  const rows = data.map(r => [
+    r.commodity,
+    r.variety || "Local",
+    r.market,
+    r.district,
+    r.state,
+    r.arrivalDate,
+    r.minimumPrice,
+    r.maximumPrice,
+    r.modalPrice,
+    r.unit,
+    r.source || "Department of Agricultural Marketing and Agri Business, Govt. of Tamil Nadu"
+  ]);
   const csv = [headers, ...rows].map(r => r.map(c => `"${c}"`).join(",")).join("\n");
   const blob = new Blob([csv], { type: "text/csv" });
   const url = URL.createObjectURL(blob);
   const a = document.createElement("a");
   a.href = url;
-  a.download = `mandi-prices-${new Date().toISOString().split("T")[0]}.csv`;
+  a.download = `tamil-nadu-mandi-prices-${new Date().toISOString().split("T")[0]}.csv`;
   a.click();
   URL.revokeObjectURL(url);
 }
@@ -50,7 +62,7 @@ const Spinner = () => (
 const ErrorCard = ({ message, onRetry }: { message: string; onRetry?: () => void }) => (
   <div className="flex flex-col items-center justify-center py-16 gap-4">
     <div className="w-16 h-16 rounded-full bg-red-50 dark:bg-red-900/20 flex items-center justify-center">
-      <span className="material-symbols-outlined text-4xl text-red-500">error_outline</span>
+      <span className="material-symbols-outlined text-4xl text-red-500" style={{ fontVariationSettings: "'FILL' 1" }}>error</span>
     </div>
     <p className="text-center text-slate-600 dark:text-slate-400 max-w-sm font-medium">{message}</p>
     {onRetry && (
@@ -179,11 +191,19 @@ const SummaryCards = ({ data, lastUpdated }: { data: MandiPrice[]; lastUpdated: 
           <p className="text-lg font-bold text-slate-800 dark:text-white">{c.value}</p>
         </div>
       ))}
-      <div className="col-span-2 lg:col-span-4 bg-slate-50 dark:bg-slate-800/50 rounded-2xl px-4 py-2.5 border border-slate-100 dark:border-slate-700 flex items-center gap-2">
-        <span className="material-symbols-outlined text-sm text-slate-400">schedule</span>
-        <p className="text-xs text-slate-500 dark:text-slate-400">
-          Last Updated: <span className="font-semibold text-slate-700 dark:text-slate-300">{formatDate(lastUpdated)}</span>
-        </p>
+      <div className="col-span-2 lg:col-span-4 bg-emerald-50 dark:bg-emerald-950/30 rounded-2xl px-4 py-2.5 border border-emerald-200 dark:border-emerald-800 flex flex-wrap items-center justify-between gap-2">
+        <div className="flex items-center gap-2">
+          <span className="material-symbols-outlined text-sm text-emerald-600 dark:text-emerald-400">verified</span>
+          <p className="text-xs text-emerald-800 dark:text-emerald-300 font-semibold">
+            Official Source: <span className="font-normal text-slate-700 dark:text-slate-300">Department of Agricultural Marketing and Agri Business, Govt. of Tamil Nadu (agrimark.tn.gov.in)</span>
+          </p>
+        </div>
+        <div className="flex items-center gap-2">
+          <span className="material-symbols-outlined text-sm text-slate-400">schedule</span>
+          <p className="text-xs text-slate-500 dark:text-slate-400">
+            Last Updated: <span className="font-semibold text-slate-700 dark:text-slate-300">{formatDate(lastUpdated)}</span>
+          </p>
+        </div>
       </div>
     </div>
   );
@@ -191,16 +211,26 @@ const SummaryCards = ({ data, lastUpdated }: { data: MandiPrice[]; lastUpdated: 
 
 // ─── Main Component ───────────────────────────────────────────────────────────
 
-export const LiveMandiPrices: React.FC = () => {
+export interface LiveMandiPricesProps {
+  initialCommodity?: string;
+  initialDistrict?: string;
+  initialSearchQuery?: string;
+}
+
+export const LiveMandiPrices: React.FC<LiveMandiPricesProps> = ({
+  initialCommodity = "",
+  initialDistrict = "",
+  initialSearchQuery = "",
+}) => {
   // Filter state
   const [commodities, setCommodities] = useState<{ id: string; name: string }[]>([]);
   const [states, setStates] = useState<string[]>([]);
   const [districts, setDistricts] = useState<string[]>([]);
   const [markets, setMarkets] = useState<string[]>([]);
 
-  const [selectedCommodity, setSelectedCommodity] = useState("");
-  const [selectedState, setSelectedState] = useState("");
-  const [selectedDistrict, setSelectedDistrict] = useState("");
+  const [selectedCommodity, setSelectedCommodity] = useState(initialCommodity);
+  const [selectedState, setSelectedState] = useState("Tamil Nadu");
+  const [selectedDistrict, setSelectedDistrict] = useState(initialDistrict);
   const [selectedMarket, setSelectedMarket] = useState("");
   const [selectedDate, setSelectedDate] = useState("");
 
@@ -213,7 +243,14 @@ export const LiveMandiPrices: React.FC = () => {
   const [hasSearched, setHasSearched] = useState(false);
 
   // Table state
-  const [searchQuery, setSearchQuery] = useState("");
+  const [searchQuery, setSearchQuery] = useState(initialSearchQuery);
+
+  // Sync when initial props change
+  useEffect(() => {
+    if (initialCommodity) setSelectedCommodity(initialCommodity);
+    if (initialDistrict) setSelectedDistrict(initialDistrict);
+    if (initialSearchQuery) setSearchQuery(initialSearchQuery);
+  }, [initialCommodity, initialDistrict, initialSearchQuery]);
   const [sortConfig, setSortConfig] = useState<SortConfig>({ key: null, direction: "asc" });
   const [currentPage, setCurrentPage] = useState(1);
   const PAGE_SIZE = 10;
@@ -322,11 +359,59 @@ export const LiveMandiPrices: React.FC = () => {
     };
   }, []);
 
-  // Table processing
-  const filtered = results.filter(r =>
-    searchQuery === "" ||
-    Object.values(r).some(v => String(v).toLowerCase().includes(searchQuery.toLowerCase()))
-  );
+  // Search alias mapping dictionary for farmer-friendly queries
+  const SEARCH_ALIAS_MAP: Record<string, string[]> = {
+    rice: ["paddy", "rice"],
+    paddy: ["paddy", "rice"],
+    turmeric: ["turmeric", "manjal", "haldi"],
+    manjal: ["turmeric", "manjal"],
+    haldi: ["turmeric", "haldi"],
+    groundnut: ["groundnut", "peanut", "verkadalai", "kadalai"],
+    peanut: ["groundnut", "peanut"],
+    verkadalai: ["groundnut", "verkadalai"],
+    blackgram: ["black gram", "blackgram", "urad", "ulundhu"],
+    "black gram": ["black gram", "blackgram", "urad", "ulundhu"],
+    urad: ["black gram", "blackgram", "urad", "ulundhu"],
+    ulundhu: ["black gram", "blackgram", "urad", "ulundhu"],
+    redgram: ["redgram", "red gram", "thuvarai", "tur", "arhar"],
+    thuvarai: ["redgram", "red gram", "tur"],
+    maize: ["maize", "corn", "sweet corn", "baby corn", "cholam"],
+    corn: ["maize", "corn", "sweet corn", "baby corn"],
+    cotton: ["cotton", "kapas", "paruthi"],
+    kapas: ["cotton", "kapas", "paruthi"],
+    paruthi: ["cotton", "kapas", "paruthi"],
+    coconut: ["coconut", "tender coconut", "thengai", "elaneer"],
+    thengai: ["coconut", "thengai"],
+    gingelly: ["gingelly", "sesame", "til", "ellu"],
+    sesame: ["gingelly", "sesame", "til", "ellu"],
+    chilli: ["chilli", "red chilli", "bajji chilli", "milagai"],
+    chillies: ["chilli", "red chilli", "bajji chilli", "milagai"],
+    onion: ["small onion", "big onion", "onion", "vengayam"],
+    tomato: ["tomato", "thakkali"],
+    potato: ["potato", "urulaikizhangu", "aloo"],
+    banana: ["banana", "vazhai", "vazhaipazham", "vazhaikkai"]
+  };
+
+  // Table processing with alias normalization
+  const filtered = results.filter(r => {
+    if (!searchQuery || searchQuery.trim() === "") return true;
+    const q = searchQuery.trim().toLowerCase();
+    
+    // Direct inclusion check across all row fields
+    const values = [r.commodity, r.variety || "", r.market, r.district, r.state].map(v => String(v).toLowerCase());
+    if (values.some(v => v.includes(q))) return true;
+
+    // Check alias dictionary
+    for (const [alias, targets] of Object.entries(SEARCH_ALIAS_MAP)) {
+      if (q === alias || q.includes(alias) || alias.includes(q)) {
+        if (targets.some(t => values.some(v => v.includes(t)))) {
+          return true;
+        }
+      }
+    }
+
+    return false;
+  });
 
   const sorted = [...filtered].sort((a, b) => {
     if (!sortConfig.key) return 0;
@@ -362,7 +447,7 @@ export const LiveMandiPrices: React.FC = () => {
           </div>
           <div>
             <h1 className="text-2xl font-extrabold text-slate-800 dark:text-white tracking-tight">Live Mandi Prices</h1>
-            <p className="text-sm text-slate-500 dark:text-slate-400">Real-time agricultural market prices from AGMARKNET</p>
+            <p className="text-sm text-slate-500 dark:text-slate-400">Official agricultural market & Uzhavar Sandhai prices — Govt. of Tamil Nadu</p>
           </div>
         </div>
       </motion.div>
@@ -569,19 +654,25 @@ export const LiveMandiPrices: React.FC = () => {
                 <table className="w-full text-sm" role="table" aria-label="Mandi Prices Table">
                   <thead>
                     <tr className="bg-slate-50 dark:bg-slate-800/80 text-left">
-                      {(["commodity", "market", "district", "state", "arrivalDate", "modalPrice"] as const).map(col => (
+                      {(["commodity", "variety", "market", "district", "arrivalDate", "minimumPrice", "maximumPrice", "modalPrice"] as const).map(col => (
                         <th
                           key={col}
-                          onClick={() => handleSort(col)}
+                          onClick={() => handleSort(col as any)}
                           role="columnheader"
                           aria-sort={sortConfig.key === col ? (sortConfig.direction === "asc" ? "ascending" : "descending") : "none"}
                           className="px-4 py-3.5 font-bold text-xs text-slate-500 dark:text-slate-400 uppercase tracking-wider cursor-pointer select-none hover:text-slate-700 dark:hover:text-slate-200 transition whitespace-nowrap sticky top-0 bg-slate-50 dark:bg-slate-800/80 z-10"
                         >
                           {{
-                            commodity: "Commodity", market: "Market", district: "District", state: "State",
-                            arrivalDate: "Arrival Date", modalPrice: "Price (Approx)",
+                            commodity: "Commodity",
+                            variety: "Variety",
+                            market: "Market / Santhai",
+                            district: "District",
+                            arrivalDate: "Arrival Date",
+                            minimumPrice: "Min Price",
+                            maximumPrice: "Max Price",
+                            modalPrice: "Modal Price",
                           }[col]}
-                          <SortIcon col={col} />
+                          <SortIcon col={col as any} />
                         </th>
                       ))}
                       <th className="px-4 py-3.5 font-bold text-xs text-slate-500 dark:text-slate-400 uppercase tracking-wider sticky top-0 bg-slate-50 dark:bg-slate-800/80 z-10">Unit</th>
@@ -594,15 +685,25 @@ export const LiveMandiPrices: React.FC = () => {
                         onClick={() => setSelectedRow(row)}
                         tabIndex={0}
                         role="row"
-                        aria-label={`${row.commodity} at ${row.market}. Click for price history`}
+                        aria-label={`${row.commodity} (${row.variety || "Local"}) at ${row.market}. Click for price history`}
                         onKeyDown={e => { if (e.key === "Enter") setSelectedRow(row); }}
                         className="hover:bg-teal-50/50 dark:hover:bg-teal-900/10 cursor-pointer transition group focus:outline-none focus:ring-2 focus:ring-inset focus:ring-teal-500"
                       >
                         <td className="px-4 py-3.5 font-semibold text-slate-800 dark:text-slate-100">{row.commodity}</td>
+                        <td className="px-4 py-3.5 text-slate-600 dark:text-slate-300 whitespace-nowrap">
+                          <span className="px-2 py-0.5 rounded-full text-xs font-medium bg-slate-100 dark:bg-slate-800 text-slate-600 dark:text-slate-400">
+                            {row.variety || "Local"}
+                          </span>
+                        </td>
                         <td className="px-4 py-3.5 text-slate-600 dark:text-slate-300 whitespace-nowrap">{row.market}</td>
                         <td className="px-4 py-3.5 text-slate-500 dark:text-slate-400 whitespace-nowrap">{row.district}</td>
-                        <td className="px-4 py-3.5 text-slate-500 dark:text-slate-400 whitespace-nowrap">{row.state}</td>
                         <td className="px-4 py-3.5 text-slate-500 dark:text-slate-400 whitespace-nowrap">{formatDate(row.arrivalDate)}</td>
+                        <td className="px-4 py-3.5 text-slate-600 dark:text-slate-300 whitespace-nowrap font-medium">
+                          {formatCurrency(row.minimumPrice || row.modalPrice)}
+                        </td>
+                        <td className="px-4 py-3.5 text-slate-600 dark:text-slate-300 whitespace-nowrap font-medium">
+                          {formatCurrency(row.maximumPrice || row.modalPrice)}
+                        </td>
                         <td className="px-4 py-3.5 whitespace-nowrap">
                           <span className="inline-flex items-center px-2.5 py-1 bg-teal-50 dark:bg-teal-900/30 text-teal-700 dark:text-teal-300 rounded-lg font-bold text-sm">
                             {formatCurrency(row.modalPrice)}

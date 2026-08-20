@@ -1,0 +1,35 @@
+[
+  {
+    "id": "e63c947b-f62d-47d7-ab50-b63f35ea0e7b",
+    "action": "ARCHIVE_UNSUPPORTED",
+    "affected_count": 0,
+    "details": {
+      "timestamp": "2026-08-20T14:59:01.552Z",
+      "totalBefore": 21
+    },
+    "performed_by": "TEST_RUNNER",
+    "created_at": "2026-08-20T14:59:01.552Z"
+  },
+  {
+    "id": "b3b22878-b875-490c-a951-8081871d8a6b",
+    "action": "ARCHIVE_UNSUPPORTED",
+    "affected_count": 0,
+    "details": {
+      "timestamp": "2026-08-20T14:56:13.010Z",
+      "totalBefore": 21
+    },
+    "performed_by": "TEST_RUNNER",
+    "created_at": "2026-08-20T14:56:13.010Z"
+  },
+  {
+    "id": "5642f172-f138-4283-b682-8930a8b454cd",
+    "action": "ARCHIVE_UNSUPPORTED",
+    "affected_count": 0,
+    "details": {
+      "timestamp": "2026-08-20T14:53:36.965Z",
+      "totalBefore": 1
+    },
+    "performed_by": "TEST_RUNNER",
+    "created_at": "2026-08-20T14:53:36.965Z"
+  }
+]

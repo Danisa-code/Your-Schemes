@@ -13,6 +13,7 @@ import com.farmersportal.service.AuthService;
 import com.farmersportal.service.EmailService;
 import com.farmersportal.service.JwtService;
 import com.farmersportal.service.SmsService;
+import com.farmersportal.service.WpSmsService;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Value;
@@ -25,6 +26,7 @@ import java.security.SecureRandom;
 import java.time.LocalDateTime;
 import java.util.List;
 import java.util.Optional;
+import java.util.UUID;
 import java.util.regex.Pattern;
 
 @Service
@@ -49,6 +51,7 @@ public class AuthServiceImpl implements AuthService {
     private final EmailService emailService;
     private final SmsService smsService;
     private final JwtService jwtService;
+    private final WpSmsService wpSmsService;
     private final SecureRandom secureRandom = new SecureRandom();
 
     public AuthServiceImpl(UserRepository userRepository,
@@ -57,7 +60,8 @@ public class AuthServiceImpl implements AuthService {
                            LoginAttemptRepository loginAttemptRepository,
                            EmailService emailService,
                            SmsService smsService,
-                           JwtService jwtService) {
+                           JwtService jwtService,
+                           WpSmsService wpSmsService) {
         this.userRepository = userRepository;
         this.otpVerificationRepository = otpVerificationRepository;
         this.mobileOtpVerificationRepository = mobileOtpVerificationRepository;
@@ -65,6 +69,7 @@ public class AuthServiceImpl implements AuthService {
         this.emailService = emailService;
         this.smsService = smsService;
         this.jwtService = jwtService;
+        this.wpSmsService = wpSmsService;
     }
 
     @Override
@@ -120,10 +125,21 @@ public class AuthServiceImpl implements AuthService {
         }
         mobileOtpVerificationRepository.saveAll(existingOtps);
 
-        // Generate 6-digit cryptographically secure OTP
+        // Generate 6-digit OTP code and hash it
         int otpInt = 100000 + secureRandom.nextInt(900000);
         String rawOtp = String.valueOf(otpInt);
         String hashedOtp = hashTargetOtp(rawOtp, normalizedMobile);
+
+        // Generate stable verification tracking ID
+        String verificationId = "ver_" + System.currentTimeMillis() + "_" + UUID.randomUUID().toString().substring(0, 8);
+
+        // Dispatch SMS via WP-SMS Service Gateway
+        boolean smsSent = wpSmsService.sendOtp(verificationId, normalizedMobile, rawOtp);
+        if (!smsSent) {
+            log.warn("WP-SMS Gateway failed to dispatch SMS for {}", normalizedMobile);
+            recordAttempt(normalizedMobile, ipAddress, false, "WP-SMS Gateway request failed");
+            throw new RuntimeException("OTP அனுப்ப முடியவில்லை. சிறிது நேரம் கழித்து முயற்சிக்கவும். / WP-SMS Gateway unavailable.");
+        }
 
         LocalDateTime now = LocalDateTime.now();
         LocalDateTime expiresAt = now.plusMinutes(EXPIRATION_MINUTES);
@@ -133,19 +149,8 @@ public class AuthServiceImpl implements AuthService {
         newOtp.setResendCount(latestOpt.map(o -> o.getResendCount() + 1).orElse(1));
         mobileOtpVerificationRepository.save(newOtp);
 
-        // Format SMS according to WebOTP origin-bound format
-        String cleanDomain = appDomain != null && !appDomain.isBlank() ? appDomain.trim() : "localhost:3000";
-        String smsMessage = "Your Farmer Assistance Portal verification OTP is " + rawOtp + ". Valid for 5 minutes. Do not share this OTP.\n\n@" + cleanDomain + " #" + rawOtp;
-
-        try {
-            smsService.sendSms(normalizedMobile, rawOtp, smsMessage);
-        } catch (Exception e) {
-            log.error("Failed to send SMS OTP: {}", e.getMessage());
-            throw new RuntimeException("OTP அனுப்ப முடியவில்லை. சிறிது நேரம் கழித்து முயற்சிக்கவும்.", e);
-        }
-
-        recordAttempt(normalizedMobile, ipAddress, true, "OTP Sent successfully");
-        return new SendOtpResponse(true, "OTP sent successfully");
+        recordAttempt(normalizedMobile, ipAddress, true, "OTP Sent successfully via WP-SMS Gateway");
+        return new SendOtpResponse(true, "OTP sent successfully", verificationId);
     }
 
     private SendOtpResponse sendEmailOtpInternal(String rawEmail, String ipAddress) {
@@ -209,15 +214,15 @@ public class AuthServiceImpl implements AuthService {
             throw new RuntimeException("OTP அனுப்ப முடியவில்லை. சிறிது நேரம் கழித்து முயற்சிக்கவும்.", e);
         }
 
-        recordAttempt(email, ipAddress, true, "OTP Sent successfully");
-        return new SendOtpResponse(true, "OTP sent successfully");
+        recordAttempt(email, ipAddress, true, "OTP Sent successfully to email");
+        return new SendOtpResponse(true, "OTP sent successfully to email");
     }
 
     @Override
     @Transactional
     public VerifyOtpResponse verifyOtp(VerifyOtpRequest request, String ipAddress) {
         if (request.getMobileNumber() != null && !request.getMobileNumber().isBlank()) {
-            return verifyMobileOtpInternal(request.getMobileNumber(), request.getOtp(), ipAddress);
+            return verifyMobileOtpInternal(request.getMobileNumber(), request.getVerificationId(), request.getOtp(), ipAddress);
         }
         if (request.getEmail() != null && !request.getEmail().isBlank()) {
             return verifyEmailOtpInternal(request.getEmail(), request.getOtp(), ipAddress);
@@ -225,7 +230,7 @@ public class AuthServiceImpl implements AuthService {
         return new VerifyOtpResponse(false, null, null, false, "Either mobile number or email is required.");
     }
 
-    private VerifyOtpResponse verifyMobileOtpInternal(String rawMobile, String submittedOtp, String ipAddress) {
+    private VerifyOtpResponse verifyMobileOtpInternal(String rawMobile, String verificationId, String submittedOtp, String ipAddress) {
         String normalizedMobile = normalizeMobileNumber(rawMobile);
         if (!INDIAN_MOBILE_PATTERN.matcher(normalizedMobile).matches()) {
             return new VerifyOtpResponse(false, null, null, false, "Invalid Indian mobile number format.");
@@ -249,8 +254,9 @@ public class AuthServiceImpl implements AuthService {
             return new VerifyOtpResponse(false, null, null, false, "OTP காலாவதியாகிவிட்டது. புதிய OTP பெறவும்.");
         }
 
-        String hashedSubmitted = hashTargetOtp(submittedOtp, normalizedMobile);
-        if (!hashedSubmitted.equals(otpRecord.getHashedOtp())) {
+        String expectedHash = hashTargetOtp(submittedOtp, normalizedMobile);
+        boolean isValid = expectedHash.equals(otpRecord.getHashedOtp());
+        if (!isValid) {
             otpRecord.setAttempts(otpRecord.getAttempts() + 1);
             mobileOtpVerificationRepository.save(otpRecord);
             recordAttempt(normalizedMobile, ipAddress, false, "Invalid OTP code");

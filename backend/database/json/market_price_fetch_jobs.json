@@ -1,0 +1,44 @@
+[
+  {
+    "id": "346b8f50-90c2-4d7f-b678-34a99b60e130",
+    "source": "Test Automated Suite",
+    "started_at": "2026-08-20T14:59:01.554Z",
+    "status": "COMPLETED",
+    "total_received": 10731,
+    "valid_records": 96,
+    "inserted_records": 46,
+    "updated_records": 0,
+    "duplicate_records": 50,
+    "rejected_records": 10635,
+    "created_at": "2026-08-20T14:59:01.554Z",
+    "completed_at": "2026-08-20T14:59:14.664Z"
+  },
+  {
+    "id": "4c1104d1-0219-48fb-9539-d8502c41d6c0",
+    "source": "Test Automated Suite",
+    "started_at": "2026-08-20T14:56:13.013Z",
+    "status": "COMPLETED",
+    "total_received": 10685,
+    "valid_records": 50,
+    "inserted_records": 0,
+    "updated_records": 0,
+    "duplicate_records": 50,
+    "rejected_records": 10635,
+    "created_at": "2026-08-20T14:56:13.013Z",
+    "completed_at": "2026-08-20T14:56:26.765Z"
+  },
+  {
+    "id": "23905bf4-0444-4c97-9911-d9da9b74b15e",
+    "source": "Test Automated Suite",
+    "started_at": "2026-08-20T14:53:36.968Z",
+    "status": "COMPLETED",
+    "total_received": 3834,
+    "valid_records": 50,
+    "inserted_records": 20,
+    "updated_records": 0,
+    "duplicate_records": 30,
+    "rejected_records": 3784,
+    "created_at": "2026-08-20T14:53:36.968Z",
+    "completed_at": "2026-08-20T14:53:52.199Z"
+  }
+]

@@ -1,4 +1,23 @@
+/**
+ * src/services/authService.ts
+ *
+ * Supabase DATABASE service for farmer profiles.
+ *
+ * Authentication is handled via Spring Boot Backend + OTP Gateway.
+ *
+ * This file retains the Supabase DATABASE operations:
+ *   - getFarmerProfile()       — query farmers table by application user ID / phone
+ *   - checkFarmerProfileExists()
+ *   - saveFarmerProfile()      — upsert into farmers table
+ *
+ * The `auth_user_id` field stores the application user's identifier (user ID or normalized phone number).
+ */
+
 import { supabase } from "../lib/supabaseClient";
+
+// ---------------------------------------------------------------------------
+// Types
+// ---------------------------------------------------------------------------
 
 export interface FarmerProfile {
   id?: string | number;
@@ -23,95 +42,50 @@ export interface SaveProfileInput {
   preferred_language: "Tamil" | "English" | "Telugu" | "Kannada" | "Hindi" | string;
 }
 
+// ---------------------------------------------------------------------------
+// Phone Number Utilities (used throughout the app)
+// ---------------------------------------------------------------------------
+
 /**
- * Normalizes input mobile number into canonical Indian international E.164 format (+91XXXXXXXXXX)
+ * Validates an Indian mobile number.
+ * Accepts 10-digit numbers starting with 6–9, with optional +91 or 91 prefix.
  */
-export const formatIndianPhoneNumber = (phone: string): string => {
-  let cleaned = phone.replace(/\D/g, "");
+export const isValidIndianPhoneNumber = (phone: string): boolean => {
+  if (!phone || typeof phone !== "string") return false;
+  if (/[a-zA-Z]/.test(phone)) return false;
+  let cleaned = phone.trim().replace(/\D/g, "");
   if (cleaned.startsWith("91") && cleaned.length === 12) {
     cleaned = cleaned.slice(2);
+  } else if (cleaned.startsWith("0") && cleaned.length === 11) {
+    cleaned = cleaned.slice(1);
   }
-  if (cleaned.length === 10) {
-    return `+91${cleaned}`;
-  }
-  if (phone.startsWith("+")) {
-    return phone;
+  return cleaned.length === 10 && /^[6-9]\d{9}$/.test(cleaned);
+};
+
+/**
+ * Normalizes an Indian phone number to E.164 format: +91XXXXXXXXXX
+ */
+export const normalizeIndianPhoneNumber = (phone: string): string => {
+  let cleaned = phone.trim().replace(/\D/g, "");
+  if (cleaned.startsWith("91") && cleaned.length === 12) {
+    cleaned = cleaned.slice(2);
+  } else if (cleaned.startsWith("0") && cleaned.length === 11) {
+    cleaned = cleaned.slice(1);
   }
   return `+91${cleaned}`;
 };
 
+export const formatIndianPhoneNumber = normalizeIndianPhoneNumber;
+
+// ---------------------------------------------------------------------------
+// Farmer Profile — Supabase Database Operations
+// ---------------------------------------------------------------------------
+
 export const authService = {
   /**
-   * 5. Send OTP using supabase.auth.signInWithOtp({ phone })
-   */
-  async sendPhoneOtp(phone: string) {
-    const formattedPhone = formatIndianPhoneNumber(phone);
-    console.log("[AuthService] Sending Phone OTP via Supabase Auth to:", formattedPhone);
-    const { data, error } = await supabase.auth.signInWithOtp({
-      phone: formattedPhone,
-    });
-    if (error) {
-      console.error("[AuthService] sendPhoneOtp Error:", error.message);
-    }
-    return { data, error };
-  },
-
-  /**
-   * 6. Verify OTP using supabase.auth.verifyOtp({ phone, token: otp, type: 'sms' })
-   */
-  async verifyPhoneOtp(phone: string, otp: string) {
-    const formattedPhone = formatIndianPhoneNumber(phone);
-    console.log("[AuthService] Verifying Phone OTP via Supabase Auth for:", formattedPhone);
-    const { data, error } = await supabase.auth.verifyOtp({
-      phone: formattedPhone,
-      token: otp,
-      type: "sms",
-    });
-    if (error) {
-      console.error("[AuthService] verifyPhoneOtp Error:", error.message);
-    }
-    return { data, error };
-  },
-
-  /**
-   * Retrieve current Supabase session
-   */
-  async getCurrentSession() {
-    const { data: { session }, error } = await supabase.auth.getSession();
-    if (error) {
-      console.error("[AuthService] getCurrentSession Error:", error.message);
-    }
-    return session;
-  },
-
-  /**
-   * Retrieve current Supabase authenticated user
-   */
-  async getCurrentUser() {
-    const { data: { user }, error } = await supabase.auth.getUser();
-    if (error) {
-      console.error("[AuthService] getCurrentUser Error:", error.message);
-    }
-    return user;
-  },
-
-  /**
-   * 15. Sign out user using supabase.auth.signOut()
-   */
-  async signOut() {
-    console.log("[AuthService] Signing out user session via Supabase Auth...");
-    const { error } = await supabase.auth.signOut();
-    if (error) {
-      console.error("[AuthService] signOut Error:", error.message);
-    }
-    localStorage.removeItem("isLoggedIn");
-    localStorage.removeItem("farmer_profile");
-    return { error };
-  },
-
-  /**
-   * 10 & 11. Store and query farmer profile separately from Supabase Auth
-   * Uses auth_user_id as relationship key in the `farmers` table.
+   * Retrieves the farmer profile from the Supabase `farmers` table.
+   * Uses application user ID / phone as `auth_user_id`.
+   * Falls back to localStorage cache if the DB is unavailable.
    */
   async getFarmerProfile(authUserId: string): Promise<FarmerProfile | null> {
     if (!authUserId) return null;
@@ -124,7 +98,6 @@ export const authService = {
 
       if (error) {
         console.warn("[AuthService] Farmers table query warning:", error.message);
-        // Fallback to local storage cache if table does not exist or network fails
         const local = localStorage.getItem(`farmer_profile_${authUserId}`);
         return local ? JSON.parse(local) : null;
       }
@@ -144,7 +117,7 @@ export const authService = {
   },
 
   /**
-   * Check whether farmer profile exists for given authenticated user ID
+   * Returns true if a complete farmer profile exists for the given user ID.
    */
   async checkFarmerProfileExists(authUserId: string): Promise<boolean> {
     if (!authUserId) return false;
@@ -153,7 +126,8 @@ export const authService = {
   },
 
   /**
-   * Save or update farmer profile in Supabase `farmers` table
+   * Creates or updates the farmer profile in the Supabase `farmers` table.
+   * Uses application user ID / phone as the upsert conflict key.
    */
   async saveFarmerProfile(profile: SaveProfileInput): Promise<{ data: FarmerProfile | null; error: any }> {
     const payload: FarmerProfile = {
@@ -167,7 +141,7 @@ export const authService = {
       updated_at: new Date().toISOString(),
     };
 
-    // Cache locally immediately to ensure instant UI responsiveness
+    // Cache locally for instant UI responsiveness
     localStorage.setItem(`farmer_profile_${profile.auth_user_id}`, JSON.stringify(payload));
     localStorage.setItem("farmer_profile", JSON.stringify(payload));
 
@@ -196,3 +170,4 @@ export const authService = {
     }
   },
 };
+

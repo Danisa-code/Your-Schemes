@@ -3,6 +3,7 @@ import axios from "axios";
 export interface SendOtpResponse {
   success: boolean;
   message: string;
+  verificationId?: string;
 }
 
 export interface FarmerUser {
@@ -57,10 +58,12 @@ export const authApi = {
     }
   },
 
-  verifyOtp: async (identifier: string, otp: string): Promise<VerifyOtpResponse> => {
+  verifyOtp: async (identifier: string, otp: string, verificationId?: string): Promise<VerifyOtpResponse> => {
     try {
       const isEmail = identifier.includes("@");
-      const payload = isEmail ? { email: identifier, otp } : { mobileNumber: identifier, otp };
+      const payload = isEmail 
+        ? { email: identifier, otp, verificationId } 
+        : { mobileNumber: identifier, otp, verificationId };
       const response = await axios.post<VerifyOtpResponse>("/api/auth/verify-otp", payload);
       if (response.data.token) {
         localStorage.setItem("jwt_token", response.data.token);

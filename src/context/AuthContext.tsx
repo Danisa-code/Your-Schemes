@@ -1,112 +1,147 @@
-import React, { createContext, useContext, useEffect, useState } from "react";
-import { User, Session, AuthError } from "@supabase/supabase-js";
-import { supabase } from "../lib/supabaseClient";
+/**
+ * src/context/AuthContext.tsx
+ *
+ * Backend JWT + OTP Gateway Authentication Context.
+ *
+ * Authentication state is managed via backend REST APIs (src/services/authApi.ts)
+ * and JWT tokens stored in localStorage.
+ *
+ * Supabase is used for the `farmers` database table operations.
+ */
+
+import React, { createContext, useContext, useEffect, useState, useRef } from "react";
+import { authApi, FarmerUser, SendOtpResponse, VerifyOtpResponse } from "../services/authApi";
 import { authService, FarmerProfile, SaveProfileInput } from "../services/authService";
 
+// ---------------------------------------------------------------------------
+// Context Shape
+// ---------------------------------------------------------------------------
+
 interface AuthContextType {
-  user: User | null;
-  session: Session | null;
-  farmerProfile: FarmerProfile | null;
+  /** Authenticated farmer user object from backend (null if not signed in) */
+  user: FarmerUser | null;
+  /** True while resolving initial authentication state */
   loading: boolean;
+  /** Shorthand: user !== null */
+  isAuthenticated: boolean;
+  /** Farmer profile from Supabase DB (null if not yet created) */
+  farmerProfile: FarmerProfile | null;
 
-  // ── Primary: Phone OTP Auth (Supabase Phone) ──────────────────────────────
-  sendPhoneOtp: (phone: string) => Promise<{ data: any; error: AuthError | null }>;
-  verifyPhoneOtp: (phone: string, otp: string) => Promise<{ data: any; error: AuthError | null }>;
+  /**
+   * Sends an SMS OTP via Backend -> OTP Gateway.
+   * @param phone E.164 normalized number (+91XXXXXXXXXX)
+   */
+  sendPhoneOtp: (phone: string) => Promise<SendOtpResponse>;
+
+  /**
+   * Verifies the 6-digit OTP entered by the farmer via Backend -> OTP Gateway.
+   * @param phone Normalized phone number
+   * @param otp 6-digit OTP code
+   * @param verificationId Safe tracking reference returned by sendPhoneOtp
+   */
+  verifyPhoneOtp: (phone: string, otp: string, verificationId?: string) => Promise<VerifyOtpResponse>;
+
+  /** Signs out the current user and clears session state */
   logout: () => Promise<void>;
-  saveProfile: (input: SaveProfileInput) => Promise<{ data: FarmerProfile | null; error: any }>;
-  refreshProfile: () => Promise<FarmerProfile | null>;
 
-  // ── Backward-compat: Email/Password/OTP Auth (used in LoginPage.tsx) ──────
-  loginWithOTP: (email: string, username: string) => Promise<{ error: AuthError | null }>;
-  verifyOTP: (email: string, token: string) => Promise<{ session: Session | null; error: AuthError | null }>;
-  loginWithPassword: (email: string, password: string) => Promise<{ session: Session | null; error: AuthError | null }>;
-  signUpWithPassword: (email: string, password: string, username: string) => Promise<{ user: User | null; error: AuthError | null }>;
-  loginWithGoogle: () => Promise<void>;
-  forgotPassword: (email: string) => Promise<{ error: AuthError | null }>;
-  updatePassword: (password: string) => Promise<{ error: AuthError | null }>;
-  exchangeCodeForSession: (code: string) => Promise<{ session: Session | null; error: AuthError | null }>;
+  /** Creates or updates the farmer profile in Supabase */
+  saveProfile: (input: SaveProfileInput) => Promise<{ data: FarmerProfile | null; error: any }>;
+
+  /** Re-fetches the farmer profile from Supabase */
+  refreshProfile: () => Promise<FarmerProfile | null>;
 }
+
+// ---------------------------------------------------------------------------
+// Context & Provider
+// ---------------------------------------------------------------------------
 
 const AuthContext = createContext<AuthContextType | undefined>(undefined);
 
 export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children }) => {
-  const [user, setUser] = useState<User | null>(null);
-  const [session, setSession] = useState<Session | null>(null);
+  const [user, setUser] = useState<FarmerUser | null>(null);
   const [farmerProfile, setFarmerProfile] = useState<FarmerProfile | null>(null);
   const [loading, setLoading] = useState(true);
+  const initializedRef = useRef(false);
 
   useEffect(() => {
-    console.log("[AuthContext] Initializing Supabase Auth Session listener...");
+    const initAuth = async () => {
+      console.log("[AuthContext] Initializing Backend Auth session check...");
+      const token = localStorage.getItem("jwt_token");
+      const localUserStr = localStorage.getItem("farmer_user");
 
-    // Initial session check
-    const checkInitialSession = async () => {
-      try {
-        const { data: { session: initialSession }, error } = await supabase.auth.getSession();
-        if (error) {
-          console.error("[AuthContext] Session fetch error:", error.message);
+      if (token) {
+        let currentUser: FarmerUser | null = null;
+        try {
+          currentUser = await authApi.getCurrentUser();
+        } catch (e) {
+          console.warn("[AuthContext] Unable to verify JWT token with backend:", e);
         }
 
-        setSession(initialSession);
-        setUser(initialSession?.user ?? null);
+        if (!currentUser && localUserStr) {
+          try {
+            currentUser = JSON.parse(localUserStr);
+          } catch (e) {
+            currentUser = null;
+          }
+        }
 
-        if (initialSession?.user) {
-          const profile = await authService.getFarmerProfile(initialSession.user.id);
-          setFarmerProfile(profile);
+        if (currentUser) {
+          setUser(currentUser);
           localStorage.setItem("isLoggedIn", "true");
+          const authUserId = String(currentUser.id || currentUser.mobileNumber);
+          const profile = await authService.getFarmerProfile(authUserId);
+          setFarmerProfile(profile);
+        } else {
+          setUser(null);
+          setFarmerProfile(null);
+          localStorage.removeItem("isLoggedIn");
+          localStorage.removeItem("jwt_token");
+          localStorage.removeItem("farmer_user");
         }
-      } catch (err) {
-        console.error("[AuthContext] Error in checkInitialSession:", err);
-      } finally {
-        setLoading(false);
-      }
-    };
-
-    checkInitialSession();
-
-    // 14. Implement supabase.auth.onAuthStateChange() to keep authentication state synchronized
-    const { data: { subscription } } = supabase.auth.onAuthStateChange(async (event, currentSession) => {
-      console.log(`[Auth State Change] Event: ${event}`);
-
-      setSession(currentSession);
-      setUser(currentSession?.user ?? null);
-      setLoading(false);
-
-      if (event === "SIGNED_IN" && currentSession?.user) {
-        localStorage.setItem("isLoggedIn", "true");
-        const profile = await authService.getFarmerProfile(currentSession.user.id);
-        setFarmerProfile(profile);
-      } else if (event === "SIGNED_OUT") {
+      } else {
+        setUser(null);
         setFarmerProfile(null);
         localStorage.removeItem("isLoggedIn");
-        localStorage.removeItem("farmer_profile");
       }
-    });
 
-    return () => {
-      subscription.unsubscribe();
+      setLoading(false);
+      initializedRef.current = true;
     };
+
+    initAuth();
   }, []);
 
-  // ── Primary Phone OTP Methods ──────────────────────────────────────────────
+  // ---------------------------------------------------------------------------
+  // Auth Methods
+  // ---------------------------------------------------------------------------
 
-  const sendPhoneOtp = async (phone: string) => {
-    return await authService.sendPhoneOtp(phone);
+  const sendPhoneOtp = async (phone: string): Promise<SendOtpResponse> => {
+    return await authApi.sendOtp(phone);
   };
 
-  const verifyPhoneOtp = async (phone: string, otp: string) => {
-    const res = await authService.verifyPhoneOtp(phone, otp);
-    if (res.data?.session?.user) {
-      const profile = await authService.getFarmerProfile(res.data.session.user.id);
+  const verifyPhoneOtp = async (
+    phone: string,
+    otp: string,
+    verificationId?: string
+  ): Promise<VerifyOtpResponse> => {
+    const res = await authApi.verifyOtp(phone, otp, verificationId);
+    if (res.success && res.user) {
+      setUser(res.user);
+      localStorage.setItem("isLoggedIn", "true");
+      const authUserId = String(res.user.id || res.user.mobileNumber);
+      const profile = await authService.getFarmerProfile(authUserId);
       setFarmerProfile(profile);
     }
     return res;
   };
 
   const logout = async () => {
-    await authService.signOut();
+    await authApi.logout();
     setUser(null);
-    setSession(null);
     setFarmerProfile(null);
+    localStorage.removeItem("isLoggedIn");
+    localStorage.removeItem("jwt_token");
+    localStorage.removeItem("farmer_user");
   };
 
   const saveProfile = async (input: SaveProfileInput) => {
@@ -117,109 +152,38 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
     return result;
   };
 
-  const refreshProfile = async () => {
-    if (user?.id) {
-      const prof = await authService.getFarmerProfile(user.id);
+  const refreshProfile = async (): Promise<FarmerProfile | null> => {
+    if (user) {
+      const authUserId = String(user.id || user.mobileNumber);
+      const prof = await authService.getFarmerProfile(authUserId);
       setFarmerProfile(prof);
       return prof;
     }
     return null;
   };
 
-  // ── Backward-compatible Email/Password/OTP stubs (used in LoginPage.tsx) ───
-
-  const loginWithOTP = async (email: string, username: string) => {
-    const { error } = await supabase.auth.signInWithOtp({
-      email,
-      options: {
-        shouldCreateUser: true,
-        data: { username },
-        emailRedirectTo: `${window.location.origin}/auth/callback`,
-      },
-    });
-    return { error: error as AuthError | null };
-  };
-
-  const verifyOTP = async (email: string, token: string) => {
-    // Try magiclink first, then signup type
-    let { data, error } = await supabase.auth.verifyOtp({ email, token, type: "magiclink" });
-    if (error) {
-      const res = await supabase.auth.verifyOtp({ email, token, type: "signup" });
-      if (!res.error) {
-        data = res.data;
-        error = null;
-      } else {
-        return { session: null, error: res.error as AuthError };
-      }
-    }
-    return { session: data.session, error: null };
-  };
-
-  const loginWithPassword = async (email: string, password: string) => {
-    const { data, error } = await supabase.auth.signInWithPassword({ email, password });
-    return { session: data.session, error: error as AuthError | null };
-  };
-
-  const signUpWithPassword = async (email: string, password: string, username: string) => {
-    const { data, error } = await supabase.auth.signUp({
-      email,
-      password,
-      options: { data: { username }, emailRedirectTo: `${window.location.origin}/auth/callback` },
-    });
-    return { user: data.user, error: error as AuthError | null };
-  };
-
-  const loginWithGoogle = async () => {
-    const { error } = await supabase.auth.signInWithOAuth({
-      provider: "google",
-      options: { redirectTo: `${window.location.origin}/auth/callback` },
-    });
-    if (error) throw error;
-  };
-
-  const forgotPassword = async (email: string) => {
-    const { error } = await supabase.auth.resetPasswordForEmail(email, {
-      redirectTo: `${window.location.origin}/reset-password`,
-    });
-    return { error: error as AuthError | null };
-  };
-
-  const updatePassword = async (password: string) => {
-    const { error } = await supabase.auth.updateUser({ password });
-    return { error: error as AuthError | null };
-  };
-
-  const exchangeCodeForSession = async (code: string) => {
-    const { data, error } = await supabase.auth.exchangeCodeForSession(code);
-    return { session: data.session, error: error as AuthError | null };
-  };
-
   return (
     <AuthContext.Provider
       value={{
         user,
-        session,
-        farmerProfile,
         loading,
+        isAuthenticated: user !== null,
+        farmerProfile,
         sendPhoneOtp,
         verifyPhoneOtp,
         logout,
         saveProfile,
         refreshProfile,
-        loginWithOTP,
-        verifyOTP,
-        loginWithPassword,
-        signUpWithPassword,
-        loginWithGoogle,
-        forgotPassword,
-        updatePassword,
-        exchangeCodeForSession,
       }}
     >
       {children}
     </AuthContext.Provider>
   );
 };
+
+// ---------------------------------------------------------------------------
+// Hook
+// ---------------------------------------------------------------------------
 
 export const useAuth = () => {
   const context = useContext(AuthContext);
@@ -228,3 +192,4 @@ export const useAuth = () => {
   }
   return context;
 };
+
