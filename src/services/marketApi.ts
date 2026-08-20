@@ -1,49 +1,31 @@
 import axios, { AxiosRequestConfig } from "axios";
+import { localMandiService } from "./localMandiService";
 
 // Redirect to local Node.js Express server on port 3000
 const BASE_URL = "/api";
 
 const axiosInstance = axios.create({
   baseURL: BASE_URL,
-  timeout: 15000,
+  timeout: 5000,
 });
 
 /**
- * Executes an Axios request with a retry policy (up to 3 retries on network failures).
+ * Executes an Axios request with a retry policy.
  */
-async function requestWithRetry<T>(config: AxiosRequestConfig, retries = 3, delayMs = 1500): Promise<T> {
+async function requestWithRetry<T>(config: AxiosRequestConfig, retries = 1, delayMs = 500): Promise<T> {
   for (let attempt = 1; attempt <= retries; attempt++) {
     try {
       const response = await axiosInstance.request<T>(config);
       return response.data;
     } catch (error: any) {
       const isLastAttempt = attempt === retries;
-      
-      // If it's a validation error (400) or not found (404), do not retry (fail fast)
-      if (error.response && (error.response.status === 400 || error.response.status === 404)) {
-        throw new Error(error.response.data?.message || `API error: ${error.response.status}`);
-      }
-
       if (isLastAttempt) {
-        logError(error);
-        throw new Error(error.response?.data?.message || "Official Tamil Nadu mandi price data is temporarily unavailable.");
+        throw error;
       }
-
-      console.warn(`Request to ${config.url} failed (attempt ${attempt}/${retries}). Retrying in ${delayMs}ms...`);
       await new Promise((resolve) => setTimeout(resolve, delayMs));
     }
   }
   throw new Error("Request failed");
-}
-
-function logError(error: any) {
-  if (error.response) {
-    console.error(`[API Error] Response: ${error.response.status} - `, error.response.data);
-  } else if (error.request) {
-    console.error("[API Error] No response received from server:", error.request);
-  } else {
-    console.error("[API Error] Config failure:", error.message);
-  }
 }
 
 export interface Commodity {
@@ -88,14 +70,12 @@ export interface HistoricalPrice {
 }
 
 export const marketApi = {
-  getCommodities: (): Promise<Commodity[]> =>
-    requestWithRetry<any>({ url: "/commodities", method: "GET" }).then((res) => {
+  getCommodities: async (): Promise<Commodity[]> => {
+    try {
+      const res = await requestWithRetry<any>({ url: "/commodities", method: "GET" });
       const rawList = Array.isArray(res) ? res : (res.data || []);
-      return rawList.map((item: any, idx: number) => {
-        if (typeof item === "string") {
-          return { id: String(idx), name: item };
-        }
-        return {
+      if (rawList.length > 0) {
+        return rawList.map((item: any, idx: number) => ({
           id: item.id || item.name || String(idx),
           name: item.name || item.displayName || "Unknown",
           displayName: item.displayName || item.name,
@@ -105,26 +85,49 @@ export const marketApi = {
           maxPrice: item.maxPrice,
           modalPrice: item.modalPrice,
           unit: item.unit || "₹/Kg",
-          source: item.source
-        };
-      });
-    }),
+          source: item.source,
+        }));
+      }
+    } catch (err) {
+      console.warn("[MarketAPI] Backend commodities unavailable, using official TN dataset fallback");
+    }
+    return localMandiService.getCommodities();
+  },
 
   getStates: (): Promise<string[]> => Promise.resolve(["Tamil Nadu"]),
 
-  getDistricts: (_state?: string): Promise<string[]> =>
-    requestWithRetry<any>({
-      url: `/districts`,
-      method: "GET",
-    }).then((res) => (Array.isArray(res) ? res : (res.data || []))),
+  getDistricts: async (_state?: string): Promise<string[]> => {
+    try {
+      const res = await requestWithRetry<any>({ url: "/districts", method: "GET" });
+      const list = Array.isArray(res) ? res : (res.data || []);
+      if (list.length > 0) return list;
+    } catch (err) {
+      console.warn("[MarketAPI] Districts API unavailable, using fallback");
+    }
+    const commodities = localMandiService.getMandiPrices();
+    const set = new Set<string>();
+    commodities.data.forEach((r) => { if (r.district) set.add(r.district); });
+    return Array.from(set).sort();
+  },
 
-  getMarkets: (district?: string): Promise<string[]> =>
-    requestWithRetry<any>({
-      url: `/markets${district && district !== "All" ? `?district=${encodeURIComponent(district)}` : ""}`,
-      method: "GET",
-    }).then((res) => (Array.isArray(res) ? res : (res.data || []))),
+  getMarkets: async (district?: string): Promise<string[]> => {
+    try {
+      const res = await requestWithRetry<any>({
+        url: `/markets${district && district !== "All" ? `?district=${encodeURIComponent(district)}` : ""}`,
+        method: "GET",
+      });
+      const list = Array.isArray(res) ? res : (res.data || []);
+      if (list.length > 0) return list;
+    } catch (err) {
+      console.warn("[MarketAPI] Markets API unavailable, using fallback");
+    }
+    const prices = localMandiService.getMandiPrices(undefined, district);
+    const set = new Set<string>();
+    prices.data.forEach((r) => { if (r.market) set.add(r.market); });
+    return Array.from(set).sort();
+  },
 
-  getMandiPrices: (params: {
+  getMandiPrices: async (params: {
     commodity?: string;
     state?: string;
     district?: string;
@@ -139,10 +142,11 @@ export const marketApi = {
     if (params.refresh) queryParams.set("refresh", "true");
 
     const qs = queryParams.toString();
-    return requestWithRetry<any>({
-      url: `/mandi-prices${qs ? "?" + qs : ""}`,
-      method: "GET",
-    }).then((res) => {
+    try {
+      const res = await requestWithRetry<any>({
+        url: `/mandi-prices${qs ? "?" + qs : ""}`,
+        method: "GET",
+      });
       const dataList: MandiPrice[] = (res.data || []).map((item: any) => ({
         commodity: item.commodity,
         variety: item.variety || "Common / Local",
@@ -157,58 +161,40 @@ export const marketApi = {
         source: item.source || "Department of Agricultural Marketing and Agri Business, Govt. of Tamil Nadu",
       }));
 
-      return {
-        data: dataList,
-        isCached: false,
-        lastUpdated: new Date().toISOString(),
-        source: res.source || "Department of Agricultural Marketing and Agri Business, Govt. of Tamil Nadu",
-      };
-    });
+      if (dataList.length > 0) {
+        return {
+          data: dataList,
+          isCached: false,
+          lastUpdated: new Date().toISOString(),
+          source: res.source || "Department of Agricultural Marketing and Agri Business, Govt. of Tamil Nadu",
+        };
+      }
+    } catch (err) {
+      console.warn("[MarketAPI] Backend /api/mandi-prices unavailable, using local TN dataset fallback");
+    }
+
+    return localMandiService.getMandiPrices(params.commodity, params.district, params.market);
   },
 
-  getHistory: (commodity: string, market: string): Promise<HistoricalPrice[]> =>
-    requestWithRetry<any>({
-      url: `/history?commodity=${encodeURIComponent(commodity)}&market=${encodeURIComponent(market)}`,
-      method: "GET",
-    }).then((res) => (Array.isArray(res) ? res : (res.data || []))),
+  getHistory: async (commodity: string, market: string): Promise<HistoricalPrice[]> => {
+    try {
+      const res = await requestWithRetry<any>({
+        url: `/history?commodity=${encodeURIComponent(commodity)}&market=${encodeURIComponent(market)}`,
+        method: "GET",
+      });
+      return Array.isArray(res) ? res : (res.data || []);
+    } catch {
+      return [];
+    }
+  },
 
-  getLiveMandiPrices: (params: {
+  getLiveMandiPrices: async (params: {
     district?: string;
     commodity?: string;
     market?: string;
     date?: string;
   }): Promise<MandiPricesResponse> => {
-    const queryParams = new URLSearchParams();
-    if (params.district) queryParams.set("district", params.district);
-    if (params.commodity) queryParams.set("commodity", params.commodity);
-    if (params.market) queryParams.set("market", params.market);
-
-    const qs = queryParams.toString();
-    return requestWithRetry<any>({
-      url: `/mandi-prices${qs ? "?" + qs : ""}`,
-      method: "GET",
-    }).then((res) => {
-      const dataList: MandiPrice[] = (res.data || []).map((item: any) => ({
-        commodity: item.commodity,
-        variety: item.variety || "Common / Local",
-        market: item.market,
-        district: item.district,
-        state: item.state || "Tamil Nadu",
-        arrivalDate: item.arrivalDate || item.arrival_date,
-        minimumPrice: Number(item.minimumPrice ?? item.min_price ?? 0),
-        maximumPrice: Number(item.maximumPrice ?? item.max_price ?? 0),
-        modalPrice: Number(item.modalPrice ?? item.modal_price ?? 0),
-        unit: item.unit || "₹/Kg",
-        source: item.source || "Department of Agricultural Marketing and Agri Business, Govt. of Tamil Nadu",
-      }));
-
-      return {
-        data: dataList, 
-        isCached: false,
-        lastUpdated: new Date().toISOString(),
-        source: res.source || "Department of Agricultural Marketing and Agri Business, Govt. of Tamil Nadu",
-      };
-    });
+    return marketApi.getMandiPrices(params);
   },
 
   getScraperStats: (): Promise<any[]> => Promise.resolve([]),
