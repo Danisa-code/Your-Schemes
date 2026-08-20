@@ -1,3 +1,4 @@
+
 package com.farmersportal.scheduler;
 
 import com.farmersportal.service.MarketPriceService;

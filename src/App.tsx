@@ -9,16 +9,16 @@ import { DashboardExtensions } from "./components/DashboardExtensions";
 import { UpcomingSchemesBanner } from "./components/UpcomingSchemesBanner";
 import { AIChatbot } from "./components/AIChatbot";
 import { VoiceAssistant, VoiceLang } from "./components/VoiceAssistant";
-import { LoginPage } from "./components/LoginPage";
 import { CropDiseaseDetection } from "./components/CropDiseaseDetection";
 import { LiveMandiPrices } from "./pages/LiveMandiPrices";
 import { AdminDashboard } from "./pages/AdminDashboard";
 import { AgriVisionEvaluator } from "./components/AgriVisionEvaluator";
 import { motion, AnimatePresence } from "motion/react";
 import { weatherApi, WeatherResponse } from "./services/weatherApi";
-import { useAuth } from "./context/AuthContext";
-import { Loader2 } from "lucide-react";
-import { supabase } from "./services/supabase";
+import { useGoogleAuth } from "./context/GoogleAuthContext";
+import { GoogleLogin, useGoogleLogin } from "@react-oauth/google";
+import { SchemeDetailModal } from "./components/SchemeDetailModal";
+import { ExternalRedirectWarning } from "./components/ExternalRedirectWarning";
 
 const getWeatherIcon = (code: number) => {
   if (code === 0) return "wb_sunny";
@@ -50,122 +50,81 @@ export default function App() {
     return "/";
   });
 
-  // Authentication State
-  const [isLoggedIn, setIsLoggedIn] = useState(() => {
-    if (typeof window !== "undefined") {
-      return localStorage.getItem("isLoggedIn") === "true";
+  // Google Auth
+  const { user: googleUser, isSignedIn, isLoaded: googleLoaded, signIn: googleSignIn, signInWithUser, signOut: googleSignOut, rememberMe, setRememberMe } = useGoogleAuth();
+  const [isSigningIn, setIsSigningIn] = useState(false);
+  const [authError, setAuthError] = useState<string | null>(null);
+  const [showSignInModal, setShowSignInModal] = useState(false);
+
+  interface UserApplication {
+    id: string;
+    schemeId: string;
+    schemeTitle: string;
+    date: string;
+    status: "Submitted" | "In Review" | "Approved";
+    farmerName: string;
+  }
+
+  const [userApplications, setUserApplications] = useState<UserApplication[]>(() => {
+    try {
+      const stored = localStorage.getItem("user_applications_list");
+      return stored ? JSON.parse(stored) : [];
+    } catch {
+      return [];
     }
-    return false;
   });
 
-  const [usernameState, setUsernameState] = useState(() => {
-    if (typeof window !== "undefined") {
-      return localStorage.getItem("loggedInUsername") || "Rajesh Patel";
-    }
-    return "Rajesh Patel";
-  });
-
-  const [emailState, setEmailState] = useState(() => {
-    if (typeof window !== "undefined") {
-      return localStorage.getItem("loggedInEmail") || "rajesh@krishisahay.in";
-    }
-    return "rajesh@krishisahay.in";
-  });
-
-  // Supabase Auth Hook & State Sync
-  const auth = useAuth();
-
-  useEffect(() => {
-    if (auth.user) {
-      setIsLoggedIn(true);
-      setUsernameState(auth.user.user_metadata?.username || auth.user.user_metadata?.full_name || auth.user.email?.split("@")[0] || "Farmer");
-      setEmailState(auth.user.email || "");
-      if (currentPath.startsWith("/auth/callback")) {
-        navigateToPath("/");
-      }
-    } else {
-      // Maintain session state if logged in as Guest Farmer
-      const storedIsLoggedIn = localStorage.getItem("isLoggedIn") === "true";
-      const storedUsername = localStorage.getItem("loggedInUsername");
-      const storedEmail = localStorage.getItem("loggedInEmail");
-      
-      if (storedIsLoggedIn && storedUsername === "Guest Farmer") {
-        setIsLoggedIn(true);
-        setUsernameState(storedUsername);
-        setEmailState(storedEmail || "guest@krishisahay.in");
-      } else {
-        setIsLoggedIn(false);
-        setUsernameState("Rajesh Patel");
-        setEmailState("rajesh@krishisahay.in");
-      }
-    }
-  }, [auth.user, currentPath]);
-
-  const handleLogout = async () => {
-    await auth.logout();
-    setIsLoggedIn(false);
-    setUsernameState("Rajesh Patel");
-    setEmailState("rajesh@krishisahay.in");
-    navigateToPath("/login");
+  const saveApplication = (app: UserApplication) => {
+    setUserApplications((prev) => {
+      const updated = [app, ...prev];
+      try {
+        localStorage.setItem("user_applications_list", JSON.stringify(updated));
+      } catch (e) {}
+      return updated;
+    });
   };
 
-  useEffect(() => {
-    const handleCallback = async () => {
-      if (typeof window === "undefined") return;
-      
-      const url = new URL(window.location.href);
-      const code = url.searchParams.get("code");
-      const hash = url.hash;
-      
-      // 1. Process PKCE Code parameters
-      if (code) {
-        console.log("[Auth Callback] Detected 'code' parameter in URL. Commencing exchange...");
-        try {
-          const { session, error } = await auth.exchangeCodeForSession(code);
-          if (error) throw error;
-          console.log("[Auth Callback] Code exchange successful. User logged in:", session?.user?.email);
-          
-          if (session?.user) {
-            setIsLoggedIn(true);
-            setUsernameState(session.user.user_metadata?.username || session.user.user_metadata?.full_name || session.user.email?.split("@")[0] || "Farmer");
-            setEmailState(session.user.email || "");
-          }
-          
-          // Clean URL parameters
-          url.searchParams.delete("code");
-          window.history.replaceState({}, document.title, url.pathname + url.search);
-          navigateToPath("/");
-        } catch (err) {
-          console.error("[Auth Callback] Code exchange failed:", err);
-        }
+  const loginWithGoogle = useGoogleLogin({
+    onSuccess: async (tokenResponse) => {
+      setIsSigningIn(true);
+      setAuthError(null);
+      try {
+        const res = await fetch("https://www.googleapis.com/oauth2/v3/userinfo", {
+          headers: { Authorization: `Bearer ${tokenResponse.access_token}` },
+        });
+        if (!res.ok) throw new Error("Failed to fetch Google profile");
+        const profile = await res.json();
+        signInWithUser({
+          sub: profile.sub,
+          name: profile.name || profile.given_name || "Google User",
+          given_name: profile.given_name || profile.name || "Google User",
+          family_name: profile.family_name || "",
+          email: profile.email,
+          picture: profile.picture || "https://lh3.googleusercontent.com/a/default-user=s96-c",
+          email_verified: profile.email_verified ?? true,
+        });
+        setShowSignInModal(false);
+      } catch (err) {
+        console.error("Google profile fetch error:", err);
+        setAuthError("Failed to retrieve your Google account details. Please try again.");
+      } finally {
+        setIsSigningIn(false);
       }
-      
-      // 2. Clean up hash tokens from magic link/OAuth if present
-      if (hash && (hash.includes("access_token") || hash.includes("error"))) {
-        console.log("[Auth Callback] Detected token or error in URL hash fragment.");
-        try {
-          // Give Supabase client a small tick to parse the hash
-          const { data: { session }, error } = await supabase.auth.getSession();
-          if (error) throw error;
-          
-          if (session?.user) {
-            console.log("[Auth Callback] Hash session parsed successfully. User:", session.user.email);
-            setIsLoggedIn(true);
-            setUsernameState(session.user.user_metadata?.username || session.user.user_metadata?.full_name || session.user.email?.split("@")[0] || "Farmer");
-            setEmailState(session.user.email || "");
-          }
-          
-          // Clean hash fragment
-          window.history.replaceState({}, document.title, window.location.pathname + window.location.search);
-          navigateToPath("/");
-        } catch (err) {
-          console.error("[Auth Callback] Hash parsing failed:", err);
-        }
-      }
-    };
+    },
+    onError: (errorResponse) => {
+      console.error("Google Sign-In failed or cancelled:", errorResponse);
+      setIsSigningIn(false);
+      setAuthError("Google Sign-In was cancelled or failed. Please try again.");
+    },
+  });
 
-    handleCallback();
-  }, [currentPath]);
+  const isLoggedIn = isSignedIn;
+  const usernameState = googleUser?.name || googleUser?.given_name || "Farmer";
+  const emailState = googleUser?.email || "";
+
+  const handleLogout = async () => {
+    googleSignOut();
+  };
 
   useEffect(() => {
     const handlePopState = () => {
@@ -314,6 +273,10 @@ export default function App() {
   const [appTerms, setAppTerms] = useState(false);
   const [selectedScheme, setSelectedScheme] = useState<Scheme>(SCHEMES[0]);
 
+  // Scheme Redirection & Detail Modal States
+  const [selectedDetailScheme, setSelectedDetailScheme] = useState<Scheme | null>(null);
+  const [redirectWarningScheme, setRedirectWarningScheme] = useState<Scheme | null>(null);
+
   // Notifications State
   const [showNotifications, setShowNotifications] = useState(false);
   const [notifications, setNotifications] = useState([
@@ -437,87 +400,59 @@ export default function App() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  // Speech Recognition Setup
-  const recognitionRef = useRef<any>(null);
-
-  useEffect(() => {
-    const SpeechRecognition = (window as any).SpeechRecognition || (window as any).webkitSpeechRecognition;
-    if (!SpeechRecognition) {
-      setSpeechSupported(false);
-    } else {
-      const rec = new SpeechRecognition();
-      rec.continuous = false;
-      rec.interimResults = false;
-      
-      rec.onstart = () => {
-        setVoiceStatus("listening");
-        setMicError(false);
-      };
-
-      rec.onerror = (e: any) => {
-        console.error("Speech recognition error", e);
-        setVoiceStatus("idle");
-        if (e.error === "not-allowed" || e.error === "service-not-allowed") {
-          setMicError(true);
-        }
-      };
-
-      rec.onend = () => {
-        setVoiceStatus("idle");
-      };
-
-      rec.onresult = async (event: any) => {
-        const text = event.results[0][0].transcript;
-        setTranscriptText(text);
-        await handleVoiceCommand(text);
-      };
-
-      recognitionRef.current = rec;
-    }
-  }, [lang]);
-
-  // Set the correct locale for the Speech Recognition based on chosen language
-  useEffect(() => {
-    if (recognitionRef.current) {
-      const locales: Record<LanguageCode, string> = {
-        en: "en-IN",
-        ta: "ta-IN",
-      };
-      recognitionRef.current.lang = locales[lang];
-    }
-  }, [lang]);
-  // Automatic voice greeting disabled as requested;
+  // Mandi Filter States (for Voice Commands & Deep-linking)
+  const [mandiFilterCommodity, setMandiFilterCommodity] = useState("");
+  const [mandiFilterDistrict, setMandiFilterDistrict] = useState("");
+  const [mandiFilterSearchQuery, setMandiFilterSearchQuery] = useState("");
 
   const speakConfirmation = (message: string, speechLang?: LanguageCode) => {
     const activeLang = speechLang || lang;
-    if ("speechSynthesis" in window) {
-      window.speechSynthesis.cancel();
+    if (!("speechSynthesis" in window)) return;
+
+    const doSpeak = (retries = 0) => {
+      // Resume if suspended (required after a user gesture on some browsers)
+      if (window.speechSynthesis.paused || window.speechSynthesis.speaking) {
+        window.speechSynthesis.cancel();
+      }
+      if ((window.speechSynthesis as any).state === "suspended") {
+        window.speechSynthesis.resume();
+      }
+
+      const voiceList = window.speechSynthesis.getVoices();
+
+      // If voices aren't loaded yet, retry up to 5 times
+      if (voiceList.length === 0 && retries < 5) {
+        setTimeout(() => doSpeak(retries + 1), 200);
+        return;
+      }
+
       const utterance = new SpeechSynthesisUtterance(message);
-      
-      // Attempt to pick a suitable voice for Indian accents/languages
-      const voiceList = voices.length > 0 ? voices : window.speechSynthesis.getVoices();
-      let matchVoice = null;
-      if (activeLang === "ta") {
-        matchVoice = voiceList.find(v => v.lang.includes("ta-IN") || v.lang.includes("ta"));
-      } else if (activeLang === "en") {
-        matchVoice = voiceList.find(v => v.lang.includes("en-IN") || v.name.includes("India") || v.lang.includes("en-GB") || v.lang.includes("en"));
-      }
-      
-      if (matchVoice) {
-        utterance.voice = matchVoice;
-      }
-      
+
       const langTags: Record<LanguageCode, string> = {
         en: "en-IN",
         ta: "ta-IN",
       };
       utterance.lang = langTags[activeLang] || "en-IN";
-      
-      // Adjust pitch/rate for clear accessibility
+
+      // Pick a matching voice
+      let matchVoice: SpeechSynthesisVoice | undefined;
+      if (activeLang === "ta") {
+        matchVoice = voiceList.find(v => v.lang.startsWith("ta"));
+      }
+      if (!matchVoice) {
+        matchVoice =
+          voiceList.find(v => v.lang === utterance.lang) ||
+          voiceList.find(v => v.lang.startsWith("en-IN") || v.name.includes("India")) ||
+          voiceList.find(v => v.lang.startsWith("en"));
+      }
+      if (matchVoice) utterance.voice = matchVoice;
+
       utterance.pitch = 1.0;
       utterance.rate = 0.95;
       window.speechSynthesis.speak(utterance);
-    }
+    };
+
+    doSpeak();
   };
 
   // Submit voice transcript to backend endpoint (or client-side parser fallback)
@@ -529,16 +464,14 @@ export default function App() {
     // Direct voice commands for switching dark/light themes
     if (textLower.includes("dark mode") || textLower.includes("night mode") || textLower.includes("डार्क मोड") || textLower.includes("डार्क") || textLower.includes("ਨਾਈਟ ਮੋਡ") || textLower.includes("ਡਾਰਕ") || textLower.includes("काळी") || textLower.includes("నలుపు") || textLower.includes("இருண்ட") || textLower.includes("இருட்டு") || textLower.includes("டார்க்")) {
       setDarkMode(true);
-      const msg = activeLang === "ta" ? "\u0b87\u0bb0\u0bc1\u0ba3\u0bcd\u0b9f \u0baa\u0baf\u0ba9\u0bcd\u0bae\u0bc1\u0bb1\u0bc8 \u0b9a\u0bc6\u0baf\u0bb2\u0bcd\u0baa\u0b9f\u0bc1\u0ba4\u0bcd\u0ba4\u0baa\u0bcd\u0baa\u0b9f\u0bcd\u0b9f\u0ba4\u0bc1." :
-                  "Dark Mode is now active.";
+      const msg = activeLang === "ta" ? "இருண்ட பயன்முறை செயல்படுத்தப்பட்டது." : "Dark Mode is now active.";
       setAiSpeechResponse(msg);
       speakConfirmation(msg, activeLang);
       setVoiceStatus("idle");
       return;
     } else if (textLower.includes("light mode") || textLower.includes("day mode") || textLower.includes("लाइट मोड") || textLower.includes("लाइट") || textLower.includes("ਲਾਈਟ") || textLower.includes("తెలుపు") || textLower.includes("पांढरा") || textLower.includes("ஒளி") || textLower.includes("லைட்")) {
       setDarkMode(false);
-      const msg = activeLang === "ta" ? "\u0b92\u0bb3\u0bbf \u0baa\u0baf\u0ba9\u0bcd\u0bae\u0bc1\u0bb1\u0bc8 \u0b9a\u0bc6\u0baf\u0bb2\u0bcd\u0baaடு\u0ba4்\u0ba4\u0baa்\u0baaட்டது." :
-                  "Light Mode is now active.";
+      const msg = activeLang === "ta" ? "ஒளி பயன்முறை செயல்படுத்தப்பட்டது." : "Light Mode is now active.";
       setAiSpeechResponse(msg);
       speakConfirmation(msg, activeLang);
       setVoiceStatus("idle");
@@ -589,7 +522,6 @@ export default function App() {
           }
         }
       } else if (directive.action === "CHANGE_LANGUAGE" && directive.data?.languageCode) {
-        // Handled above, but let's make sure if we didn't update it yet
         const newLang = directive.data.languageCode as LanguageCode;
         if (["en", "hi", "mr", "te", "pa", "ta"].includes(newLang)) {
           setLang(newLang);
@@ -599,8 +531,6 @@ export default function App() {
         setSearchQuery(directive.data.searchQuery);
       } else if (directive.action === "FILL_FORM" && directive.data) {
         const info = directive.data;
-        
-        // Fill form fields dynamically based on active page
         if (screen === "apply_scheme" || directive.target === "apply_scheme" || directive.target === "form") {
           setScreen("apply_scheme");
           if (info.farmerName) setAppFarmerName(info.farmerName);
@@ -624,7 +554,6 @@ export default function App() {
           if (appStep < 3) {
             setAppStep((prev) => (prev + 1) as any);
           } else {
-            // final submission trigger
             setScreen("success");
           }
         } else if (screen === "land" || screenLandSubmitCheck()) {
@@ -633,31 +562,173 @@ export default function App() {
       }
 
     } catch (err) {
-      console.error("Failed to parse voice command with backend:", err);
-      // Client-side rule fallback mechanism (for offline or local parsing)
+      console.warn("Using smart client-side voice interpreter:", err);
       const lowercase = inputText.toLowerCase();
       let responseText = "Understood. Performing action.";
       let targetLang = activeLang;
 
-      if (lowercase.includes("home") || lowercase.includes("dashboard") || lowercase.includes("முகப்பு") || lowercase.includes("டேஷ்போர்டு")) {
+      // Commodities dictionary (English & Tamil)
+      const COMMODITIES_DICT = [
+        { name: "Tomato", terms: ["tomato", "tomatoes", "தக்காளி"] },
+        { name: "Onion", terms: ["onion", "onions", "shallot", "shallots", "வெங்காயம்", "சின்ன வெங்காயம்", "பல்லாரி"] },
+        { name: "Potato", terms: ["potato", "potatoes", "உருளைக்கிழங்கு", "உருளை"] },
+        { name: "Paddy (Dhan)", terms: ["paddy", "rice", "dhan", "நெல்", "அரிசி"] },
+        { name: "Cotton", terms: ["cotton", "பருத்தி", "காட்டன்"] },
+        { name: "Turmeric", terms: ["turmeric", "மஞ்சள்"] },
+        { name: "Coconut", terms: ["coconut", "copra", "தேங்காய்", "கொப்பரை"] },
+        { name: "Sugarcane", terms: ["sugarcane", "கரும்பு"] },
+        { name: "Banana", terms: ["banana", "வாழை", "வாழைப்பழம்"] },
+        { name: "Chilli", terms: ["chilli", "chili", "chillies", "mirchi", "மிளகாய்", "பச்சை மிளகாய்", "வத்தல்"] },
+        { name: "Maize", terms: ["maize", "corn", "மக்காச்சோளம்", "சோளம்"] },
+        { name: "Groundnut", terms: ["groundnut", "peanut", "நிலக்கடலை", "வேர்க்கடலை", "கடலை"] },
+        { name: "Wheat", terms: ["wheat", "கோதுமை"] },
+        { name: "Ginger", terms: ["ginger", "இஞ்சி"] },
+        { name: "Garlic", terms: ["garlic", "பூண்டு"] },
+        { name: "Brinjal", terms: ["brinjal", "eggplant", "aubergine", "கத்திரிக்காய்", "கத்தரி"] },
+        { name: "Ladies Finger", terms: ["ladies finger", "okra", "bhindi", "வெண்டைக்காய்", "வெண்டை"] },
+        { name: "Cabbage", terms: ["cabbage", "முட்டைக்கோஸ்", "கோஸ்"] },
+        { name: "Carrot", terms: ["carrot", "கேரட்"] },
+      ];
+
+      // Districts dictionary (Tamil Nadu)
+      const DISTRICTS_DICT = [
+        { name: "Salem", terms: ["salem", "சேலம்", "சேலத்து"] },
+        { name: "Coimbatore", terms: ["coimbatore", "kovai", "கோயம்புத்தூர்", "கோவை"] },
+        { name: "Madurai", terms: ["madurai", "மதுரை"] },
+        { name: "Tiruchirappalli", terms: ["trichy", "tiruchirappalli", "tiruchy", "திருச்சி", "திருச்சிராப்பள்ளி"] },
+        { name: "Chennai", terms: ["chennai", "madras", "சென்னை"] },
+        { name: "Erode", terms: ["erode", "ஈரோடு"] },
+        { name: "Tiruppur", terms: ["tiruppur", "tirupur", "திருப்பூர்"] },
+        { name: "Thanjavur", terms: ["thanjavur", "tanjore", "தஞ்சாவூர்", "தஞ்சை"] },
+        { name: "Dindigul", terms: ["dindigul", "திண்டுக்கல்"] },
+        { name: "Vellore", terms: ["vellore", "வேலூர்"] },
+        { name: "Tirunelveli", terms: ["tirunelveli", "nellai", "திருநெல்வேலி", "நெல்லை"] },
+        { name: "Dharmapuri", terms: ["dharmapuri", "தருமபுரி", "தர்மபுரி"] },
+        { name: "Krishnagiri", terms: ["krishnagiri", "கிருஷ்ணகிரி"] },
+        { name: "Namakkal", terms: ["namakkal", "நாமக்கல்"] },
+        { name: "Theni", terms: ["theni", "தேனி"] },
+        { name: "Karur", terms: ["karur", "கரூர்"] },
+        { name: "Cuddalore", terms: ["cuddalore", "கடலூர்"] },
+        { name: "Villupuram", terms: ["villupuram", "விழுப்புரம்"] },
+        { name: "Kanchipuram", terms: ["kanchipuram", "காஞ்சிபுரம்"] },
+        { name: "Thiruvallur", terms: ["thiruvallur", "திருவள்ளூர்"] },
+        { name: "Pudukkottai", terms: ["pudukkottai", "புதுக்கோட்டை"] },
+        { name: "Ramanathapuram", terms: ["ramanathapuram", "ராமநாதபுரம்"] },
+        { name: "Sivaganga", terms: ["sivaganga", "சிவகங்கை"] },
+        { name: "Nagapattinam", terms: ["nagapattinam", "நாகப்பட்டினம்"] },
+        { name: "Tiruvarur", terms: ["tiruvarur", "திருவாரூர்"] },
+        { name: "Nilgiris", terms: ["nilgiris", "ooty", "நீலகிரி", "ஊட்டி"] },
+        { name: "Tenkasi", terms: ["tenkasi", "தென்காசி"] },
+        { name: "Tirupathur", terms: ["tirupathur", "திருப்பத்தூர்"] },
+        { name: "Ranipet", terms: ["ranipet", "ராணிப்பேட்டை"] },
+        { name: "Kallakurichi", terms: ["kallakurichi", "கள்ளக்குறிச்சி"] },
+        { name: "Chengalpattu", terms: ["chengalpattu", "செங்கல்பட்டு"] },
+        { name: "Mayiladuthurai", terms: ["mayiladuthurai", "மயிலாடுதுறை"] },
+        { name: "Perambalur", terms: ["perambalur", "பெரம்பலூர்"] },
+        { name: "Ariyalur", terms: ["ariyalur", "அரியலூர்"] },
+        { name: "Virudhunagar", terms: ["virudhunagar", "விருதுநகர்"] },
+        { name: "Thoothukudi", terms: ["thoothukudi", "tuticorin", "தூத்துக்குடி"] },
+      ];
+
+      const matchedCommodity = COMMODITIES_DICT.find(c => c.terms.some(term => lowercase.includes(term)));
+      const matchedDistrict = DISTRICTS_DICT.find(d => d.terms.some(term => lowercase.includes(term)));
+      const isMandiIntent =
+        lowercase.includes("mandi") ||
+        lowercase.includes("market") ||
+        lowercase.includes("price") ||
+        lowercase.includes("rate") ||
+        lowercase.includes("cost") ||
+        lowercase.includes("மண்டி") ||
+        lowercase.includes("சந்தை") ||
+        lowercase.includes("விலை") ||
+        lowercase.includes("ரேட்") ||
+        Boolean(matchedCommodity && matchedDistrict);
+
+      if (isMandiIntent || matchedCommodity || matchedDistrict) {
+        setScreen("mandi_prices");
+        if (matchedCommodity) setMandiFilterCommodity(matchedCommodity.name);
+        if (matchedDistrict) setMandiFilterDistrict(matchedDistrict.name);
+        if (matchedCommodity && !matchedDistrict) setMandiFilterSearchQuery(matchedCommodity.name);
+
+        if (matchedCommodity && matchedDistrict) {
+          responseText = activeLang === "ta"
+            ? `${matchedDistrict.name} மாவட்டத்தில் ${matchedCommodity.terms[matchedCommodity.terms.length - 1]} மண்டி விலையைக் காட்டுகிறேன்.`
+            : `Showing live Mandi price for ${matchedCommodity.name} in ${matchedDistrict.name}.`;
+        } else if (matchedCommodity) {
+          responseText = activeLang === "ta"
+            ? `${matchedCommodity.terms[matchedCommodity.terms.length - 1]} மண்டி விலையைக் காட்டுகிறேன்.`
+            : `Showing live Mandi prices for ${matchedCommodity.name}.`;
+        } else if (matchedDistrict) {
+          responseText = activeLang === "ta"
+            ? `${matchedDistrict.name} மாவட்ட மண்டி விலைகளைத் திறக்கிறது.`
+            : `Opening Mandi prices for ${matchedDistrict.name}.`;
+        } else {
+          responseText = activeLang === "ta" ? "மண்டி விலை பக்கத்தைத் திறக்கிறது." : "Opening Live Mandi prices page.";
+        }
+      } else if (lowercase.includes("drought") || lowercase.includes("வறட்சி") || lowercase.includes("நிவாரணம்") || lowercase.includes("relief")) {
+        const droughtSch = SCHEMES.find(s => s.id === "special_drought_relief") || SCHEMES[0];
+        setScreen("schemes");
+        setSelectedDetailScheme(droughtSch);
+        responseText = activeLang === "ta"
+          ? "சிறப்பு வறட்சி நிவாரணத் திட்ட விவரங்களைத் திறக்கிறது."
+          : "Opening Special Drought Relief scheme details.";
+      } else if (lowercase.includes("kisan credit") || lowercase.includes("kcc") || lowercase.includes("கிரெடிட் கார்டு") || lowercase.includes("விவசாய கடன்")) {
+        const kccScheme = SCHEMES.find(s => s.id === "kisan_credit_card") || SCHEMES[0];
+        setScreen("schemes");
+        setSelectedDetailScheme(kccScheme);
+        responseText = activeLang === "ta"
+          ? "கிசான் கிரெடிட் கார்டு திட்ட விவரங்களைத் திறக்கிறது."
+          : "Opening Kisan Credit Card scheme details.";
+      } else if (lowercase.includes("tractor") || lowercase.includes("டிராக்டர்") || lowercase.includes("இயந்திரம்") || lowercase.includes("machinery")) {
+        const tractorSch = SCHEMES.find(s => s.id === "tractor_loan") || SCHEMES[0];
+        setScreen("schemes");
+        setSelectedDetailScheme(tractorSch);
+        responseText = activeLang === "ta"
+          ? "டிராக்டர் மற்றும் வேளாண் இயந்திர மானியத் திட்டத்தைத் திறக்கிறது."
+          : "Opening Tractor & Agricultural Machinery subsidy scheme.";
+      } else if (lowercase.includes("solar") || lowercase.includes("kusum") || lowercase.includes("சோலார்") || lowercase.includes("பம்ப்") || lowercase.includes("pump")) {
+        const kusumSch = SCHEMES.find(s => s.id === "pm_kusum") || SCHEMES[0];
+        setScreen("schemes");
+        setSelectedDetailScheme(kusumSch);
+        responseText = activeLang === "ta"
+          ? "பிஎம்-குசும் சோலார் பம்ப் திட்ட விவரங்களைத் திறக்கிறது."
+          : "Opening PM-KUSUM Solar Pump subsidy scheme.";
+      } else if (lowercase.includes("insurance") || lowercase.includes("fasal bima") || lowercase.includes("காப்பீடு") || lowercase.includes("பயிர் காப்பீடு")) {
+        const insSch = SCHEMES.find(s => s.id === "pm_fasal_bima") || SCHEMES[0];
+        setScreen("schemes");
+        setSelectedDetailScheme(insSch);
+        responseText = activeLang === "ta"
+          ? "பிரதம மந்திரி பயிர் காப்பீட்டுத் திட்டத்தைத் திறக்கிறது."
+          : "Opening PM Fasal Bima Crop Insurance scheme.";
+      } else if (lowercase.includes("organic") || lowercase.includes("pkvy") || lowercase.includes("இயற்கை") || lowercase.includes("உரம்")) {
+        const orgSch = SCHEMES.find(s => s.id === "pkvy_organic") || SCHEMES[0];
+        setScreen("schemes");
+        setSelectedDetailScheme(orgSch);
+        responseText = activeLang === "ta"
+          ? "இயற்கை வேளாண்மை திட்டத்தைத் திறக்கிறது."
+          : "Opening PKVY Organic Farming subsidy scheme.";
+      } else if (lowercase.includes("gold") || lowercase.includes("தங்கம்") || lowercase.includes("தங்க கடன்")) {
+        const goldSch = SCHEMES.find(s => s.id === "agri_gold_loan") || SCHEMES[0];
+        setScreen("schemes");
+        setSelectedDetailScheme(goldSch);
+        responseText = activeLang === "ta"
+          ? "விவசாய தங்கக் கடன் திட்ட விவரங்களைத் திறக்கிறது."
+          : "Opening Agri Gold Loan details.";
+      } else if (lowercase.includes("disease") || lowercase.includes("pest") || lowercase.includes("scanner") || lowercase.includes("நோய்") || lowercase.includes("கண்டறி") || lowercase.includes("ஸ்கேனர்")) {
+        setScreen("disease_detection");
+        responseText = activeLang === "ta" ? "பயிர் நோய் கண்டறிதல் ஸ்கேனரைத் திறக்கிறது." : "Opening Crop Disease Diagnostics scanner.";
+      } else if (lowercase.includes("weather") || lowercase.includes("rain") || lowercase.includes("forecast") || lowercase.includes("climate") || lowercase.includes("வானிலை") || lowercase.includes("மழை") || lowercase.includes("காற்று")) {
         setScreen("home");
-        responseText = activeLang === "ta" ? "முகப்புப் பக்கத்திற்கு உங்களை அழைத்துச் செல்கிறோம்." : "Redirecting you to the Home Dashboard.";
+        responseText = activeLang === "ta"
+          ? "இன்றைய விவசாய வானிலை மற்றும் மழை முன்னறிவிப்பு முகப்பில் காட்டப்படுகிறது."
+          : "Displaying your real-time local weather and rain advisory on the dashboard.";
       } else if (lowercase.includes("calculator") || lowercase.includes("profit") || lowercase.includes("subsidy") || lowercase.includes("கணக்கீடு") || lowercase.includes("கணக்கீடுகள்") || lowercase.includes("லாபம்") || lowercase.includes("மானியம்")) {
         setScreen("calculators");
         responseText = activeLang === "ta" ? "விவசாய கணக்கீடுகளைத் திறக்கிறது." : "Opening agricultural calculators and scheme recommendations.";
-      } else if (lowercase.includes("mandi") || lowercase.includes("market price") || lowercase.includes("commodity price") || lowercase.includes("மண்டி") || lowercase.includes("சந்தை") || lowercase.includes("விலை")) {
-        setScreen("mandi_prices");
-        responseText = activeLang === "ta" ? "மண்டி விலை பக்கத்தைத் திறக்கிறது." : "Opening Live Mandi prices page.";
-      } else if (lowercase.includes("disease") || lowercase.includes("நோய்") || lowercase.includes("கண்டறி")) {
-        setScreen("disease_detection");
-        responseText = activeLang === "ta" ? "பயிர் நோய் கண்டறிதல் பக்கத்தைத் திறக்கிறது." : "Opening Crop Disease Diagnostics scanner.";
       } else if (lowercase.includes("community") || lowercase.includes("forum") || lowercase.includes("சமூகம்") || lowercase.includes("விவாதம்")) {
         setScreen("community");
         responseText = activeLang === "ta" ? "விவசாயி சமூகப் பக்கத்தைத் திறக்கிறது." : "Opening the farmer community hub.";
-      } else if (lowercase.includes("scheme") || lowercase.includes("yojana") || lowercase.includes("திட்டம்") || lowercase.includes("திட்டங்கள்")) {
-        setScreen("schemes");
-        responseText = activeLang === "ta" ? "விவசாயத் திட்டங்களைத் திறக்கிறது." : "Opening the Schemes page.";
-      } else if (lowercase.includes("land") || lowercase.includes("evaluation") || lowercase.includes("நிலம்") || lowercase.includes("மதிப்பீடு")) {
+      } else if (lowercase.includes("land") || lowercase.includes("evaluation") || lowercase.includes("soil") || lowercase.includes("நிலம்") || lowercase.includes("மதிப்பீடு") || lowercase.includes("மண்")) {
         setScreen("land");
         responseText = activeLang === "ta" ? "நில மதிப்பீடு பக்கத்திற்குச் செல்கிறது." : "Navigating to Land Evaluation and soil health checks.";
       } else if (lowercase.includes("profile") || lowercase.includes("சுயவிவரம்") || lowercase.includes("சுயவிவர")) {
@@ -671,11 +742,17 @@ export default function App() {
         targetLang = "en";
         setLang("en");
         responseText = "Switched to English language.";
-      } else if (lowercase.includes("apply") || lowercase.includes("kisan credit") || lowercase.includes("விண்ணப்பி") || lowercase.includes("விண்ணப்பம்") || lowercase.includes("படிவம்")) {
+      } else if (lowercase.includes("home") || lowercase.includes("dashboard") || lowercase.includes("முகப்பு") || lowercase.includes("டேஷ்போர்டு")) {
+        setScreen("home");
+        responseText = activeLang === "ta" ? "முகப்புப் பக்கத்திற்கு உங்களை அழைத்துச் செல்கிறோம்." : "Redirecting you to the Home Dashboard.";
+      } else if (lowercase.includes("scheme") || lowercase.includes("yojana") || lowercase.includes("திட்டம்") || lowercase.includes("திட்டங்கள்")) {
+        setScreen("schemes");
+        responseText = activeLang === "ta" ? "விவசாயத் திட்டங்களைத் திறக்கிறது." : "Opening the Schemes page.";
+      } else if (lowercase.includes("apply") || lowercase.includes("விண்ணப்பி") || lowercase.includes("விண்ணப்பம்") || lowercase.includes("படிவம்")) {
         setSelectedScheme(SCHEMES[0]);
         setScreen("apply_scheme");
         setAppStep(1);
-        responseText = activeLang === "ta" ? "கிசான் கிரெடிட் கார்டு விண்ணப்பத்தைத் திறக்கிறது." : "Opening application for Kisan Credit Card.";
+        responseText = activeLang === "ta" ? "விண்ணப்பப் படிவத்தைத் திறக்கிறது." : "Opening scheme application form.";
       } else if (lowercase.includes("search") || lowercase.includes("தேடு") || lowercase.includes("கண்டறி")) {
         const query = lowercase.replace("search", "").replace("for", "").replace("தேடு", "").replace("தேடுக", "").trim();
         setScreen("schemes");
@@ -752,23 +829,9 @@ export default function App() {
     }, 1500);
   };
 
-  // Helper trigger to turn mic listener on or off
+  // Helper trigger for voice assistant
   const toggleMicrophone = () => {
-    if (!speechSupported) {
-      alert("Speech recognition API is not supported in this browser version. You can type commands in the input box below!");
-      return;
-    }
-    if (voiceStatus === "listening") {
-      recognitionRef.current?.stop();
-    } else {
-      setTranscriptText("");
-      setAiSpeechResponse("");
-      try {
-        recognitionRef.current?.start();
-      } catch (err) {
-        console.error("Mic start error:", err);
-      }
-    }
+    // Voice Assistant floating widget manages mic state directly
   };
 
   const submitTypedCommand = (e: React.FormEvent) => {
@@ -787,9 +850,39 @@ export default function App() {
   };
 
   const handleSchemeSelectAndApply = (scheme: Scheme) => {
-    setSelectedScheme(scheme);
-    navigateTo("apply_scheme");
-    setAppStep(1);
+    if (
+      (scheme.verification_status === "VERIFIED" || scheme.verification_status === undefined) &&
+      scheme.official_application_url
+    ) {
+      setRedirectWarningScheme(scheme);
+      return;
+    }
+
+    if (scheme.application_type === "OFFLINE" || scheme.verification_status === "OFFLINE" || !scheme.official_application_url) {
+      if (scheme.official_info_url) {
+        window.open(scheme.official_info_url, "_blank", "noopener,noreferrer");
+        return;
+      }
+      alert(
+        lang === "ta"
+          ? "இந்த திட்டத்திற்கு ஆன்லைன் விண்ணப்ப வசதி இல்லை.\nவிண்ணப்பிக்க அருகிலுள்ள வேளாண்மை அலுவலகத்தை அணுகவும்."
+          : "Online application is not available for this scheme.\nPlease contact your nearest Agriculture Department office."
+      );
+      return;
+    }
+
+    alert(
+      lang === "ta"
+        ? "அதிகாரப்பூர்வ விண்ணப்ப இணைப்பு தற்போது கிடைக்கவில்லை."
+        : "Official application link is currently unavailable."
+    );
+  };
+
+  const handleConfirmRedirect = () => {
+    if (redirectWarningScheme?.official_application_url) {
+      window.open(redirectWarningScheme.official_application_url, "_blank", "noopener,noreferrer");
+    }
+    setRedirectWarningScheme(null);
   };
 
   const handleLandSubmitForm = (e: React.FormEvent) => {
@@ -802,67 +895,27 @@ export default function App() {
     if (appStep < 3) {
       setAppStep((prev) => (prev + 1) as any);
     } else {
+      const newApp: UserApplication = {
+        id: `KS-${new Date().getFullYear()}-${Math.floor(10000 + Math.random() * 90000)}`,
+        schemeId: selectedScheme.id,
+        schemeTitle: selectedScheme.title,
+        date: new Date().toLocaleDateString("en-IN", { day: "numeric", month: "short", year: "numeric" }),
+        status: "In Review",
+        farmerName: appFarmerName || googleUser?.name || "Farmer",
+      };
+      saveApplication(newApp);
       navigateTo("success");
     }
   };
 
-  if (auth.loading) {
+  // Show a loading spinner while Google Auth initialises
+  if (!googleLoaded) {
     return (
       <div className="min-h-screen w-full flex flex-col items-center justify-center bg-slate-50 text-slate-800 font-sans">
-        <Loader2 className="w-10 h-10 text-blue-600 animate-spin mb-4" />
-        <p className="text-xs font-semibold tracking-wide text-slate-500 uppercase">Securing connection...</p>
+        <div className="w-10 h-10 border-4 border-blue-500 border-t-transparent rounded-full animate-spin mb-4" />
+        <p className="text-xs font-semibold tracking-wide text-slate-500 uppercase">Loading...</p>
       </div>
     );
-  }
-
-  const isCallbackUrl = typeof window !== "undefined" && 
-    (window.location.search.includes("code=") || window.location.hash.includes("access_token="));
-
-  if (currentPath.startsWith("/auth/callback") || isCallbackUrl) {
-    return (
-      <div className="min-h-screen w-full flex flex-col items-center justify-center bg-slate-50 text-slate-800 font-sans">
-        <Loader2 className="w-10 h-10 text-blue-600 animate-spin mb-4" />
-        <p className="text-xs font-semibold tracking-wide text-slate-500 uppercase">Completing sign in...</p>
-      </div>
-    );
-  }
-
-  if (currentPath === "/reset-password") {
-    return (
-      <LoginPage
-        mode="reset-password"
-        onLoginSuccess={(usr, email) => {
-          localStorage.setItem("isLoggedIn", "true");
-          localStorage.setItem("loggedInUsername", usr);
-          localStorage.setItem("loggedInEmail", email);
-          setIsLoggedIn(true);
-          setUsernameState(usr);
-          setEmailState(email);
-          navigateToPath("/");
-        }}
-      />
-    );
-  }
-
-  if (!isLoggedIn) {
-    return (
-      <LoginPage
-        mode="login"
-        onLoginSuccess={(usr, email) => {
-          localStorage.setItem("isLoggedIn", "true");
-          localStorage.setItem("loggedInUsername", usr);
-          localStorage.setItem("loggedInEmail", email);
-          setIsLoggedIn(true);
-          setUsernameState(usr);
-          setEmailState(email);
-          navigateToPath("/");
-        }}
-      />
-    );
-  }
-
-  if (currentPath === "/login" || currentPath === "/signup") {
-    navigateToPath("/");
   }
 
   return (
@@ -986,47 +1039,126 @@ export default function App() {
             <span className="absolute top-2 right-2 w-2 h-2 bg-red-500 rounded-full"></span>
           </button>
 
-          {/* Secure Ledger Sign In/Out Trigger Button */}
-          {isLoggedIn ? (
-            <button
-              onClick={handleLogout}
-              className="flex h-10 px-4 items-center gap-1.5 rounded-full bg-red-50 hover:bg-red-100 text-red-600 font-bold text-xs transition cursor-pointer active:scale-95 border-none"
-              title="Logout of your secure Krishi account"
-            >
-              <span className="material-symbols-outlined text-sm font-bold">logout</span>
-              <span className="hidden sm:inline">Logout</span>
-            </button>
-          ) : (
-            <button
-              onClick={() => navigateToPath("/login")}
-              className="flex h-10 px-4 items-center gap-1.5 rounded-full bg-blue-50 hover:bg-blue-100 text-blue-600 font-bold text-xs transition cursor-pointer active:scale-95 border-none"
-              title="Sign in to your secure Krishi account"
-            >
-              <span className="material-symbols-outlined text-sm font-bold">login</span>
-              <span className="hidden sm:inline">Sign In</span>
-            </button>
-          )}
-
-          {/* User Profile Thumbnail */}
-          <div className="flex items-center gap-2 border-l border-slate-200 pl-3">
-            <div className="w-10 h-10 rounded-full border-2 border-[#beead1] shadow-sm flex items-center justify-center bg-emerald-600 text-white font-bold text-xs">
-              {usernameState ? usernameState.charAt(0).toUpperCase() : "U"}
-            </div>
-            <div className="hidden lg:block text-left">
-              <p className="text-xs font-semibold text-slate-800 leading-tight">
-                {usernameState}
-              </p>
-              <p className="text-[9px] text-slate-400">
-                {emailState} (GPS Verified)
-              </p>
+          {/* Google Auth Controls */}
+          <div className="flex items-center gap-2 border-l border-slate-200 dark:border-zinc-700 pl-3">
+            {isLoggedIn && googleUser ? (
+              <div className="flex items-center gap-2">
+                <img
+                  src={googleUser.picture}
+                  alt={googleUser.name}
+                  className="w-8 h-8 rounded-full border-2 border-emerald-300 shadow-sm cursor-pointer"
+                  title={googleUser.name}
+                  onClick={() => setShowSignInModal(true)}
+                />
+                <div className="hidden lg:block text-left">
+                  <p className="text-xs font-semibold text-slate-800 dark:text-slate-200 leading-tight">{googleUser.given_name}</p>
+                  <p className="text-[10px] text-slate-500 leading-tight">{googleUser.email}</p>
+                </div>
+                <button
+                  onClick={handleLogout}
+                  className="flex h-8 px-3 items-center gap-1 rounded-full bg-red-50 hover:bg-red-100 text-red-600 font-bold text-xs transition cursor-pointer active:scale-95 border-none"
+                  title="Sign out"
+                >
+                  <span className="material-symbols-outlined text-sm">logout</span>
+                  <span className="hidden sm:inline">Sign Out</span>
+                </button>
+              </div>
+            ) : (
               <button
-                onClick={handleLogout}
-                className="text-[9px] text-red-600 hover:text-red-800 font-bold bg-transparent border-none cursor-pointer p-0 underline block text-left mt-0.5"
+                onClick={() => {
+                  setAuthError(null);
+                  loginWithGoogle();
+                }}
+                disabled={isSigningIn}
+                className="flex h-9 px-4 items-center gap-2 rounded-full bg-white hover:bg-slate-50 text-slate-700 font-bold text-xs transition cursor-pointer active:scale-95 border border-slate-200 shadow-sm"
               >
-                Logout
+                <svg className="w-4 h-4" viewBox="0 0 24 24">
+                  <path fill="#4285F4" d="M22.56 12.25c0-.78-.07-1.53-.2-2.25H12v4.26h5.92c-.26 1.37-1.04 2.53-2.21 3.31v2.77h3.57c2.08-1.92 3.28-4.74 3.28-8.09z"/>
+                  <path fill="#34A853" d="M12 23c2.97 0 5.46-.98 7.28-2.66l-3.57-2.77c-.98.66-2.23 1.06-3.71 1.06-2.86 0-5.29-1.93-6.16-4.53H2.18v2.84C3.99 20.53 7.7 23 12 23z"/>
+                  <path fill="#FBBC05" d="M5.84 14.09c-.22-.66-.35-1.36-.35-2.09s.13-1.43.35-2.09V7.07H2.18C1.43 8.55 1 10.22 1 12s.43 3.45 1.18 4.93l3.66-2.84z"/>
+                  <path fill="#EA4335" d="M12 5.38c1.62 0 3.06.56 4.21 1.64l3.15-3.15C17.45 2.09 14.97 1 12 1 7.7 1 3.99 3.47 2.18 7.07l3.66 2.84c.87-2.6 3.3-4.53 6.16-4.53z"/>
+                </svg>
+                <span>{isSigningIn ? "Signing In..." : "Sign in with Google"}</span>
               </button>
-            </div>
+            )}
           </div>
+
+          {/* Google Sign-In Modal */}
+          {showSignInModal && !isLoggedIn && (
+            <div
+              className="fixed inset-0 z-[200] flex items-center justify-center bg-black/50 backdrop-blur-sm"
+              onClick={(e) => { if (e.target === e.currentTarget) setShowSignInModal(false); }}
+            >
+              <div className="relative bg-white dark:bg-zinc-900 rounded-2xl shadow-2xl p-8 flex flex-col items-center gap-5 w-[340px] border border-slate-200 dark:border-zinc-700">
+                {/* Close button */}
+                <button
+                  onClick={() => setShowSignInModal(false)}
+                  className="absolute top-4 right-4 w-7 h-7 flex items-center justify-center rounded-full hover:bg-slate-100 dark:hover:bg-zinc-800 text-slate-400 cursor-pointer transition"
+                >
+                  <span className="material-symbols-outlined text-sm">close</span>
+                </button>
+
+                {/* Branding */}
+                <div className="flex flex-col items-center gap-1">
+                  <div className="w-14 h-14 rounded-full bg-gradient-to-br from-emerald-500 to-teal-600 flex items-center justify-center mb-1 shadow-lg">
+                    <span className="material-symbols-outlined text-white text-2xl">grass</span>
+                  </div>
+                  <h2 className="text-lg font-extrabold text-slate-900 dark:text-white font-display">Welcome to Your Schemes</h2>
+                  <p className="text-xs text-slate-500 dark:text-slate-400 text-center">Sign in to access personalised schemes, mandi prices and more</p>
+                </div>
+
+                {/* Remember Me toggle */}
+                <label className="w-full flex items-center gap-3 cursor-pointer select-none group px-1">
+                  <div
+                    onClick={() => setRememberMe(!rememberMe)}
+                    className={`relative w-10 h-5 rounded-full transition-colors duration-200 flex-shrink-0 ${
+                      rememberMe ? "bg-emerald-500" : "bg-slate-200 dark:bg-zinc-700"
+                    }`}
+                  >
+                    <span
+                      className={`absolute top-0.5 left-0.5 w-4 h-4 rounded-full bg-white shadow-sm transform transition-transform duration-200 ${
+                        rememberMe ? "translate-x-5" : "translate-x-0"
+                      }`}
+                    />
+                  </div>
+                  <div className="flex flex-col">
+                    <span className="text-xs font-semibold text-slate-700 dark:text-slate-200">
+                      Remember me
+                    </span>
+                    <span className="text-[10px] text-slate-400">
+                      {rememberMe ? "Stay signed in across browser restarts" : "Sign out when browser closes"}
+                    </span>
+                  </div>
+                </label>
+
+                {/* Google Sign-In Action Button */}
+                <div className="w-full space-y-3">
+                  <button
+                    onClick={() => {
+                      setAuthError(null);
+                      loginWithGoogle();
+                    }}
+                    disabled={isSigningIn}
+                    className="w-full h-12 px-4 rounded-xl bg-white dark:bg-zinc-800 hover:bg-slate-50 dark:hover:bg-zinc-700 text-slate-800 dark:text-white border border-slate-200 dark:border-zinc-700 font-bold text-xs flex items-center justify-center gap-3 transition shadow-sm cursor-pointer active:scale-98"
+                  >
+                    <svg className="w-5 h-5 shrink-0" viewBox="0 0 24 24">
+                      <path fill="#4285F4" d="M22.56 12.25c0-.78-.07-1.53-.2-2.25H12v4.26h5.92c-.26 1.37-1.04 2.53-2.21 3.31v2.77h3.57c2.08-1.92 3.28-4.74 3.28-8.09z"/>
+                      <path fill="#34A853" d="M12 23c2.97 0 5.46-.98 7.28-2.66l-3.57-2.77c-.98.66-2.23 1.06-3.71 1.06-2.86 0-5.29-1.93-6.16-4.53H2.18v2.84C3.99 20.53 7.7 23 12 23z"/>
+                      <path fill="#FBBC05" d="M5.84 14.09c-.22-.66-.35-1.36-.35-2.09s.13-1.43.35-2.09V7.07H2.18C1.43 8.55 1 10.22 1 12s.43 3.45 1.18 4.93l3.66-2.84z"/>
+                      <path fill="#EA4335" d="M12 5.38c1.62 0 3.06.56 4.21 1.64l3.15-3.15C17.45 2.09 14.97 1 12 1 7.7 1 3.99 3.47 2.18 7.07l3.66 2.84c.87-2.6 3.3-4.53 6.16-4.53z"/>
+                    </svg>
+                    <span>{isSigningIn ? "Connecting to Google..." : "Continue with Google"}</span>
+                  </button>
+
+                  {authError && (
+                    <p className="text-xs text-red-500 text-center font-medium bg-red-50 dark:bg-red-950/40 p-2 rounded-lg">{authError}</p>
+                  )}
+                </div>
+
+                <p className="text-[10px] text-slate-400 text-center">By signing in you agree to our terms. Your data stays private.</p>
+              </div>
+            </div>
+          )}
 
         </div>
       </header>
@@ -1044,6 +1176,9 @@ export default function App() {
             transition={{ duration: 0.22, ease: [0.16, 1, 0.3, 1] }}
             className="w-full"
           >
+            {/* Clerk handles auth routing — no custom OTP routes needed */}
+            {null}
+
             {/* ==================== 1. HOME DASHBOARD ==================== */}
             {screen === "home" && (
           <div className="space-y-8 animate-scale-in">
@@ -1514,7 +1649,7 @@ export default function App() {
                   key={scheme.id}
                   className="bg-white border border-[#E9ECEF] rounded-2xl p-5 flex flex-col justify-between shadow-sm hover:shadow-md transition-all duration-300 hover:border-primary text-left"
                 >
-                  <div className="space-y-4">
+                  <div className="space-y-3">
                     <div className="flex justify-between items-start">
                       <div className="p-3 bg-[#EEF4FD] rounded-xl text-primary">
                         <span className="material-symbols-outlined text-2xl">
@@ -1525,21 +1660,31 @@ export default function App() {
                            scheme.icon === "Truck" ? "local_shipping" : "leaf"}
                         </span>
                       </div>
-                      <span className={`px-3 py-1 text-[10px] uppercase font-bold rounded-full ${
-                        scheme.badgeType === "active" ? "bg-emerald-100 text-emerald-800" :
-                        scheme.badgeType === "open" ? "bg-blue-100 text-blue-800" :
-                        scheme.badgeType === "banking" ? "bg-amber-100 text-amber-800" : "bg-purple-100 text-purple-800"
-                      }`}>
-                        {scheme.badge}
-                      </span>
+                      <div className="flex flex-col items-end gap-1">
+                        <span className={`px-3 py-1 text-[10px] uppercase font-bold rounded-full ${
+                          scheme.badgeType === "active" ? "bg-emerald-100 text-emerald-800" :
+                          scheme.badgeType === "open" ? "bg-blue-100 text-blue-800" :
+                          scheme.badgeType === "banking" ? "bg-amber-100 text-amber-800" : "bg-purple-100 text-purple-800"
+                        }`}>
+                          {scheme.badge}
+                        </span>
+                        <span className="text-[10px] font-bold text-slate-400">
+                          {scheme.government_level === "TAMIL_NADU" ? (lang === "ta" ? "தமிழ்நாடு அரசு" : "TN Govt") : (lang === "ta" ? "மத்திய அரசு" : "Central Govt")}
+                        </span>
+                      </div>
                     </div>
 
                     <div>
                       <h3 className="text-lg font-bold text-slate-900 font-display">{scheme.title}</h3>
-                      <p className="text-slate-500 text-xs mt-1.5 leading-relaxed">{scheme.description}</p>
+                      {scheme.name_ta && (
+                        <p className="text-xs font-bold text-emerald-700 mt-0.5">{scheme.name_ta}</p>
+                      )}
+                      <p className="text-slate-500 text-xs mt-1.5 leading-relaxed line-clamp-2">
+                        {lang === "ta" && scheme.description_ta ? scheme.description_ta : scheme.description}
+                      </p>
                     </div>
 
-                    <div className="py-3 border-t border-slate-50 space-y-2">
+                    <div className="py-2.5 border-t border-b border-slate-50 space-y-1.5">
                       <div className="flex items-center gap-2 text-xs text-slate-700">
                         <span className="material-symbols-outlined text-slate-400 text-sm">groups</span>
                         <span className="font-semibold">{scheme.criteria}</span>
@@ -1549,14 +1694,46 @@ export default function App() {
                         <span className="font-bold">{scheme.benefit}</span>
                       </div>
                     </div>
+
+                    {/* Verification Status Badge */}
+                    {scheme.verification_status === "VERIFIED" && (
+                      <div className="flex items-center justify-between text-[11px] font-bold text-emerald-800 pt-1">
+                        <span className="flex items-center gap-1">
+                          <span className="w-2 h-2 rounded-full bg-emerald-500 animate-pulse" />
+                          <span>{lang === "ta" ? "🟢 அதிகாரப்பூர்வ அரசு இணையதளம்" : "🟢 Official Government Website"}</span>
+                        </span>
+                      </div>
+                    )}
+                    {scheme.verification_status === "OFFLINE" && (
+                      <div className="flex items-center justify-between text-[11px] font-bold text-amber-800 pt-1">
+                        <span>{lang === "ta" ? "🟡 ஆன்லைன் விண்ணப்பம் இல்லை" : "🟡 In-Person Application"}</span>
+                      </div>
+                    )}
                   </div>
 
-                  <button 
-                    onClick={() => handleSchemeSelectAndApply(scheme)}
-                    className="w-full h-11 bg-primary hover:bg-emerald-800 text-white rounded-xl text-xs font-bold transition shadow-sm active:scale-95 mt-4"
-                  >
-                    {activeTranslations.applyNow}
-                  </button>
+                  {/* Dual Action Buttons */}
+                  <div className="grid grid-cols-2 gap-2 mt-4">
+                    <button 
+                      onClick={() => setSelectedDetailScheme(scheme)}
+                      className="h-11 bg-slate-100 hover:bg-slate-200 text-slate-800 rounded-xl text-xs font-bold transition shadow-sm cursor-pointer"
+                    >
+                      {activeTranslations.viewDetails}
+                    </button>
+                    <button 
+                      onClick={() => handleSchemeSelectAndApply(scheme)}
+                      className={`h-11 rounded-xl text-xs font-bold transition shadow-sm active:scale-95 flex items-center justify-center gap-1 cursor-pointer ${
+                        scheme.application_type === "OFFLINE" || scheme.verification_status === "OFFLINE"
+                          ? "bg-amber-700 hover:bg-amber-800 text-white"
+                          : "bg-primary hover:bg-emerald-800 text-white"
+                      }`}
+                    >
+                      <span>
+                        {scheme.application_type === "OFFLINE" || scheme.verification_status === "OFFLINE"
+                          ? (lang === "ta" ? "அலுவலகம் ↗" : "Find Office ↗")
+                          : (lang === "ta" ? "விண்ணப்பிக்க ↗" : "Apply ↗")}
+                      </span>
+                    </button>
+                  </div>
                 </article>
               ))}
             </div>
@@ -1571,7 +1748,10 @@ export default function App() {
                 <h2 className="text-2xl font-bold font-display">{activeTranslations.droughtTitle}</h2>
                 <p className="text-emerald-100 text-sm max-w-md">{activeTranslations.droughtDesc}</p>
                 <button 
-                  onClick={() => alert("Redirecting to Drought Relief check portal...")} 
+                  onClick={() => {
+                    const droughtScheme = SCHEMES.find(s => s.id === "special_drought_relief") || SCHEMES[0];
+                    setSelectedDetailScheme(droughtScheme);
+                  }}
                   className="mt-2 text-white font-bold text-xs flex items-center gap-1 hover:underline cursor-pointer"
                 >
                   <span>{activeTranslations.viewDetails}</span>
@@ -1999,50 +2179,168 @@ export default function App() {
             <div className="bg-white border border-[#E9ECEF] rounded-3xl shadow-md p-8 relative overflow-hidden">
               <div className="absolute top-0 right-0 w-32 h-32 bg-[#0F5238]/5 rounded-bl-full pointer-events-none"></div>
               
-              <div className="flex flex-col items-center text-center pb-6 border-b border-slate-100">
-                <div className="w-24 h-24 rounded-full overflow-hidden border-4 border-[#beead1] shadow-md relative">
-                  <img 
-                    className="w-full h-full object-cover" 
-                    src="https://lh3.googleusercontent.com/aida-public/AB6AXuD45Exqc7s149CWz_WlS0a8AqTGKdBrWJAgE6Y-lm_1yGbg7jHe01Iy2hfd3FKXiSbTFn3dV2-ikn-9f0nK03xjwhI1fAiqz0GVrjiu-ekf7hsSTdkUTtxSl0ueaC5_r-ev4SMu_-XVNlKyY3MJwQGua1yKxmPIDMxRgaPdhQx4lhlrClITz7EptCbr5BBTDccIAo5Llqu-BpT7rAA_-2456u32EQJWPVE9k-UQEcB0sFLLp_0RRsJ52K7evhhvCGSX4eOJCaccftu8"
-                    alt="Rajesh Patel Profile Large" 
-                    referrerPolicy="no-referrer"
-                  />
+              <div className="flex flex-col items-center text-center pb-6 border-b border-slate-100 dark:border-zinc-800">
+                <div className="w-24 h-24 rounded-full overflow-hidden border-4 border-[#beead1] shadow-md relative bg-emerald-50 flex items-center justify-center">
+                  {googleUser?.picture ? (
+                    <img 
+                      className="w-full h-full object-cover" 
+                      src={googleUser.picture}
+                      alt={googleUser.name || "Profile"} 
+                      referrerPolicy="no-referrer"
+                    />
+                  ) : (
+                    <div className="w-full h-full bg-emerald-700 text-white font-bold text-3xl flex items-center justify-center">
+                      {(googleUser?.name || "F")[0].toUpperCase()}
+                    </div>
+                  )}
                 </div>
-                <h3 className="text-xl font-bold text-slate-800 mt-4 font-display">{activeTranslations.farmerProfile}</h3>
-                <span className="text-xs font-semibold px-3 py-1 bg-emerald-100 text-emerald-800 rounded-full border border-emerald-200 mt-1">
-                  ID: KS-GPS-99283
-                </span>
+                <h3 className="text-xl font-bold text-slate-800 dark:text-white mt-4 font-display">
+                  {googleUser?.name || activeTranslations.farmerProfile}
+                </h3>
+                {googleUser?.email ? (
+                  <p className="text-xs text-slate-500 dark:text-slate-400 font-medium mt-0.5">
+                    {googleUser.email}
+                  </p>
+                ) : (
+                  <p className="text-xs text-slate-400 font-medium mt-0.5">
+                    Tamil Nadu Agriculture Portal
+                  </p>
+                )}
+                <div className="flex items-center gap-2 mt-2">
+                  <span className="text-xs font-semibold px-3 py-1 bg-emerald-100 text-emerald-800 rounded-full border border-emerald-200 flex items-center gap-1.5">
+                    <span className="w-1.5 h-1.5 rounded-full bg-emerald-500"></span>
+                    <span>{isLoggedIn ? "Google Verified" : "Guest Mode"}</span>
+                  </span>
+                  {isLoggedIn ? (
+                    <button
+                      onClick={handleLogout}
+                      className="text-xs font-bold px-3 py-1 bg-red-50 hover:bg-red-100 text-red-600 rounded-full border border-red-200 transition cursor-pointer"
+                    >
+                      Sign Out
+                    </button>
+                  ) : (
+                    <button
+                      onClick={() => loginWithGoogle()}
+                      className="text-xs font-bold px-3 py-1 bg-emerald-600 hover:bg-emerald-700 text-white rounded-full transition cursor-pointer"
+                    >
+                      Sign In
+                    </button>
+                  )}
+                </div>
               </div>
 
               <div className="space-y-4 pt-6 text-sm">
-                <h4 className="font-bold text-slate-800 uppercase tracking-wider text-xs font-display">{activeTranslations.assetSummary}</h4>
+                <div className="flex justify-between items-center">
+                  <h4 className="font-bold text-slate-800 dark:text-white uppercase tracking-wider text-xs font-display">
+                    {activeTranslations.assetSummary}
+                  </h4>
+                  <span className="text-[11px] font-semibold text-emerald-600 dark:text-emerald-400">
+                    Live Status
+                  </span>
+                </div>
+
                 <div className="grid grid-cols-2 gap-4">
-                  <div className="p-4 bg-slate-50 rounded-2xl border border-slate-100">
+                  <div className="p-4 bg-slate-50 dark:bg-zinc-800/60 rounded-2xl border border-slate-100 dark:border-zinc-700/60">
                     <span className="text-slate-400 text-xs font-semibold">Total Land Size</span>
-                    <p className="text-lg font-bold text-primary mt-1">4.2 Acres</p>
+                    <p className="text-lg font-bold text-primary mt-1">
+                      {evalSize && parseFloat(evalSize) > 0 ? `${evalSize} Acres` : "0.0 Acres"}
+                    </p>
+                    {(!evalSize || parseFloat(evalSize) <= 0) && (
+                      <button
+                        onClick={() => setScreen("land")}
+                        className="text-[10px] text-emerald-600 dark:text-emerald-400 font-bold hover:underline mt-1 block"
+                      >
+                        + Evaluate Land
+                      </button>
+                    )}
                   </div>
-                  <div className="p-4 bg-slate-50 rounded-2xl border border-slate-100">
+                  <div className="p-4 bg-slate-50 dark:bg-zinc-800/60 rounded-2xl border border-slate-100 dark:border-zinc-700/60">
                     <span className="text-slate-400 text-xs font-semibold">Active Subsidies</span>
-                    <p className="text-lg font-bold text-[#0056D2] mt-1">3 Schemes</p>
+                    <p className="text-lg font-bold text-[#0056D2] mt-1">
+                      {userApplications.length === 0 ? "0 Applied" : `${userApplications.length} ${userApplications.length === 1 ? "Scheme" : "Schemes"}`}
+                    </p>
+                    {userApplications.length === 0 && (
+                      <button
+                        onClick={() => setScreen("schemes")}
+                        className="text-[10px] text-blue-600 dark:text-blue-400 font-bold hover:underline mt-1 block"
+                      >
+                        + Browse Schemes
+                      </button>
+                    )}
                   </div>
                 </div>
 
                 <div className="space-y-3 pt-2">
-                  <div className="flex justify-between items-center p-3 bg-slate-50 hover:bg-slate-100 rounded-xl transition">
-                    <span className="text-slate-600 font-semibold text-xs">District Location</span>
-                    <span className="font-bold text-slate-800 text-xs">{resolvedAddress || "Nashik, Maharashtra"}</span>
+                  <div className="flex justify-between items-center p-3 bg-slate-50 dark:bg-zinc-800/60 hover:bg-slate-100 dark:hover:bg-zinc-800 rounded-xl transition">
+                    <span className="text-slate-600 dark:text-slate-300 font-semibold text-xs">District Location</span>
+                    <span className="font-bold text-slate-800 dark:text-white text-xs">{resolvedAddress || "Tamil Nadu, India"}</span>
                   </div>
-                  <div className="flex justify-between items-center p-3 bg-slate-50 hover:bg-slate-100 rounded-xl transition">
-                    <span className="text-slate-600 font-semibold text-xs">Aadhaar Status</span>
-                    <span className="font-bold text-emerald-700 text-xs flex items-center gap-1">
-                      <span className="material-symbols-outlined text-sm">check_circle</span>
-                      <span>Verified</span>
+                  <div className="flex justify-between items-center p-3 bg-slate-50 dark:bg-zinc-800/60 hover:bg-slate-100 dark:hover:bg-zinc-800 rounded-xl transition">
+                    <span className="text-slate-600 dark:text-slate-300 font-semibold text-xs">Account Status</span>
+                    <span className="font-bold text-emerald-700 dark:text-emerald-400 text-xs flex items-center gap-1">
+                      <span className="material-symbols-outlined text-sm">verified_user</span>
+                      <span>{isLoggedIn ? "Google Authenticated" : "Guest Mode"}</span>
                     </span>
                   </div>
-                  <div className="flex justify-between items-center p-3 bg-slate-50 hover:bg-slate-100 rounded-xl transition">
-                    <span className="text-slate-600 font-semibold text-xs">Soil Health Rating</span>
-                    <span className="font-bold text-blue-700 text-xs uppercase">Excellent (8.5/10)</span>
+                  <div className="flex justify-between items-center p-3 bg-slate-50 dark:bg-zinc-800/60 hover:bg-slate-100 dark:hover:bg-zinc-800 rounded-xl transition">
+                    <span className="text-slate-600 dark:text-slate-300 font-semibold text-xs">Soil Health Rating</span>
+                    <span className="font-bold text-blue-700 dark:text-blue-400 text-xs uppercase">
+                      {evaluatedLandValue ? "Evaluated (8.5/10)" : "Pending Evaluation"}
+                    </span>
                   </div>
+                </div>
+
+                {/* My Applied Schemes Section */}
+                <div className="mt-6 pt-6 border-t border-slate-100 dark:border-zinc-800">
+                  <div className="flex justify-between items-center mb-3">
+                    <h4 className="font-bold text-slate-800 dark:text-white uppercase tracking-wider text-xs font-display">
+                      My Applied Schemes ({userApplications.length})
+                    </h4>
+                    {userApplications.length > 0 && (
+                      <button
+                        onClick={() => setScreen("schemes")}
+                        className="text-xs text-primary font-bold hover:underline"
+                      >
+                        + Apply More
+                      </button>
+                    )}
+                  </div>
+
+                  {userApplications.length === 0 ? (
+                    <div className="p-6 rounded-2xl bg-slate-50 dark:bg-zinc-800/40 border border-dashed border-slate-200 dark:border-zinc-700 text-center space-y-3">
+                      <span className="material-symbols-outlined text-3xl text-slate-400">assignment</span>
+                      <p className="text-xs text-slate-600 dark:text-slate-400 font-medium">
+                        No scheme applications submitted yet.
+                      </p>
+                      <button
+                        onClick={() => setScreen("schemes")}
+                        className="px-4 py-2 bg-[#0F5238] hover:bg-[#1a7a52] text-white rounded-xl text-xs font-bold transition shadow-sm cursor-pointer"
+                      >
+                        Explore & Apply for Schemes
+                      </button>
+                    </div>
+                  ) : (
+                    <div className="space-y-2.5">
+                      {userApplications.map((app) => (
+                        <div
+                          key={app.id}
+                          className="p-3.5 bg-slate-50 dark:bg-zinc-800/70 rounded-xl border border-slate-200 dark:border-zinc-700 flex justify-between items-center"
+                        >
+                          <div>
+                            <p className="text-xs font-bold text-slate-800 dark:text-white leading-tight">
+                              {app.schemeTitle}
+                            </p>
+                            <p className="text-[10px] text-slate-500 font-mono mt-0.5">
+                              ID: {app.id} • {app.date}
+                            </p>
+                          </div>
+                          <span className="px-2.5 py-1 text-[10px] font-bold rounded-full bg-amber-100 text-amber-800 dark:bg-amber-900/40 dark:text-amber-300 border border-amber-300 dark:border-amber-700">
+                            {app.status}
+                          </span>
+                        </div>
+                      ))}
+                    </div>
+                  )}
                 </div>
 
                 {/* Admin Access Panel */}
@@ -2069,7 +2367,11 @@ export default function App() {
           <CropDiseaseDetection translations={activeTranslations} lang={lang} />
         )}
         {screen === "mandi_prices" && (
-          <LiveMandiPrices />
+          <LiveMandiPrices
+            initialCommodity={mandiFilterCommodity}
+            initialDistrict={mandiFilterDistrict}
+            initialSearchQuery={mandiFilterSearchQuery}
+          />
         )}
         {screen === "admin" && (
           <AdminDashboard onBack={() => setScreen("profile")} />
@@ -2332,6 +2634,31 @@ export default function App() {
       </nav>
 
       <AIChatbot />
+
+      {/* Scheme Detail Modal Popup */}
+      {selectedDetailScheme && (
+        <SchemeDetailModal
+          scheme={selectedDetailScheme}
+          lang={lang}
+          onClose={() => setSelectedDetailScheme(null)}
+          onApply={(sch) => {
+            setSelectedDetailScheme(null);
+            handleSchemeSelectAndApply(sch);
+          }}
+        />
+      )}
+
+      {/* External Redirect Warning Confirmation Dialog */}
+      {redirectWarningScheme && (
+        <ExternalRedirectWarning
+          url={redirectWarningScheme.official_application_url!}
+          schemeTitle={redirectWarningScheme.title}
+          schemeTitleTa={redirectWarningScheme.name_ta}
+          lang={lang}
+          onConfirm={handleConfirmRedirect}
+          onCancel={() => setRedirectWarningScheme(null)}
+        />
+      )}
 
     </div>
   );

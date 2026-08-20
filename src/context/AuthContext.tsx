@@ -1,322 +1,189 @@
-import React, { createContext, useContext, useEffect, useState } from "react";
-import { User, Session, AuthError } from "@supabase/supabase-js";
-import { supabase } from "../services/supabase";
+/**
+ * src/context/AuthContext.tsx
+ *
+ * Backend JWT + OTP Gateway Authentication Context.
+ *
+ * Authentication state is managed via backend REST APIs (src/services/authApi.ts)
+ * and JWT tokens stored in localStorage.
+ *
+ * Supabase is used for the `farmers` database table operations.
+ */
+
+import React, { createContext, useContext, useEffect, useState, useRef } from "react";
+import { authApi, FarmerUser, SendOtpResponse, VerifyOtpResponse } from "../services/authApi";
+import { authService, FarmerProfile, SaveProfileInput } from "../services/authService";
+
+// ---------------------------------------------------------------------------
+// Context Shape
+// ---------------------------------------------------------------------------
 
 interface AuthContextType {
-  user: User | null;
-  session: Session | null;
+  /** Authenticated farmer user object from backend (null if not signed in) */
+  user: FarmerUser | null;
+  /** True while resolving initial authentication state */
   loading: boolean;
-  signUpWithPassword: (email: string, password: string, username: string) => Promise<{ user: User | null; error: AuthError | null }>;
-  loginWithPassword: (email: string, password: string) => Promise<{ session: Session | null; error: AuthError | null }>;
-  loginWithOTP: (email: string, username: string) => Promise<{ error: AuthError | null }>;
-  verifyOTP: (email: string, token: string) => Promise<{ session: Session | null; error: AuthError | null }>;
-  loginWithGoogle: () => Promise<void>;
+  /** Shorthand: user !== null */
+  isAuthenticated: boolean;
+  /** Farmer profile from Supabase DB (null if not yet created) */
+  farmerProfile: FarmerProfile | null;
+
+  /**
+   * Sends an SMS OTP via Backend -> OTP Gateway.
+   * @param phone E.164 normalized number (+91XXXXXXXXXX)
+   */
+  sendPhoneOtp: (phone: string) => Promise<SendOtpResponse>;
+
+  /**
+   * Verifies the 6-digit OTP entered by the farmer via Backend -> OTP Gateway.
+   * @param phone Normalized phone number
+   * @param otp 6-digit OTP code
+   * @param verificationId Safe tracking reference returned by sendPhoneOtp
+   */
+  verifyPhoneOtp: (phone: string, otp: string, verificationId?: string) => Promise<VerifyOtpResponse>;
+
+  /** Signs out the current user and clears session state */
   logout: () => Promise<void>;
-  forgotPassword: (email: string) => Promise<{ error: AuthError | null }>;
-  updatePassword: (password: string) => Promise<{ error: AuthError | null }>;
-  exchangeCodeForSession: (code: string) => Promise<{ session: Session | null; error: AuthError | null }>;
+
+  /** Creates or updates the farmer profile in Supabase */
+  saveProfile: (input: SaveProfileInput) => Promise<{ data: FarmerProfile | null; error: any }>;
+
+  /** Re-fetches the farmer profile from Supabase */
+  refreshProfile: () => Promise<FarmerProfile | null>;
 }
+
+// ---------------------------------------------------------------------------
+// Context & Provider
+// ---------------------------------------------------------------------------
 
 const AuthContext = createContext<AuthContextType | undefined>(undefined);
 
 export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children }) => {
-  const [user, setUser] = useState<User | null>(null);
-  const [session, setSession] = useState<Session | null>(null);
+  const [user, setUser] = useState<FarmerUser | null>(null);
+  const [farmerProfile, setFarmerProfile] = useState<FarmerProfile | null>(null);
   const [loading, setLoading] = useState(true);
+  const initializedRef = useRef(false);
 
   useEffect(() => {
-    console.log("[Auth Context] Initializing session listener...");
-    
-    // 1. Initial Session Check (Real Supabase)
-    const checkSession = async () => {
-      try {
-        console.log("[Auth Context] Fetching current active session...");
-        const { data: { session: initialSession }, error } = await supabase.auth.getSession();
-        if (error) {
-          console.error("[Auth Context] Error fetching initial session:", error.message);
-          throw error;
+    const initAuth = async () => {
+      console.log("[AuthContext] Initializing Backend Auth session check...");
+      const token = localStorage.getItem("jwt_token");
+      const localUserStr = localStorage.getItem("farmer_user");
+
+      if (token) {
+        let currentUser: FarmerUser | null = null;
+        try {
+          currentUser = await authApi.getCurrentUser();
+        } catch (e) {
+          console.warn("[AuthContext] Unable to verify JWT token with backend:", e);
         }
-        
-        if (initialSession) {
-          console.log("[Auth Context] Active session retrieved successfully. User email:", initialSession.user?.email);
+
+        if (!currentUser && localUserStr) {
+          try {
+            currentUser = JSON.parse(localUserStr);
+          } catch (e) {
+            currentUser = null;
+          }
+        }
+
+        if (currentUser) {
+          setUser(currentUser);
+          localStorage.setItem("isLoggedIn", "true");
+          const authUserId = String(currentUser.id || currentUser.mobileNumber);
+          const profile = await authService.getFarmerProfile(authUserId);
+          setFarmerProfile(profile);
         } else {
-          console.log("[Auth Context] No active session found.");
+          setUser(null);
+          setFarmerProfile(null);
+          localStorage.removeItem("isLoggedIn");
+          localStorage.removeItem("jwt_token");
+          localStorage.removeItem("farmer_user");
         }
-        
-        setSession(initialSession);
-        setUser(initialSession?.user ?? null);
-      } catch (err) {
-        console.error("[Auth Context] Unexpected error in checkSession:", err);
-      } finally {
-        setLoading(false);
-      }
-    };
-
-    checkSession();
-
-    // 2. Auth State Listener (Real Supabase)
-    const { data: { subscription } } = supabase.auth.onAuthStateChange((event, currentSession) => {
-      console.log(`[Auth State Changed] Event: ${event}`);
-      if (currentSession) {
-        console.log(`[Auth State Changed] Active User details: Email=${currentSession.user?.email}, ID=${currentSession.user?.id}`);
       } else {
-        console.log("[Auth State Changed] Session is null (User signed out).");
-      }
-      
-      setSession(currentSession);
-      setUser(currentSession?.user ?? null);
-      setLoading(false);
-
-      if (event === "SIGNED_IN" && currentSession?.user) {
-        localStorage.setItem("isLoggedIn", "true");
-        localStorage.setItem("loggedInEmail", currentSession.user.email ?? "");
-        localStorage.setItem("loggedInUsername", currentSession.user.user_metadata?.username || currentSession.user.user_metadata?.full_name || currentSession.user.email?.split("@")[0] || "Farmer");
-      } else if (event === "SIGNED_OUT") {
+        setUser(null);
+        setFarmerProfile(null);
         localStorage.removeItem("isLoggedIn");
-        localStorage.removeItem("loggedInEmail");
-        localStorage.removeItem("loggedInUsername");
       }
-    });
 
-    return () => {
-      console.log("[Auth Context] Cleaning up auth listener subscription.");
-      subscription.unsubscribe();
+      setLoading(false);
+      initializedRef.current = true;
     };
+
+    initAuth();
   }, []);
 
-  const signUpWithPassword = async (email: string, password: string, username: string) => {
-    console.log("[Auth Service] Sign up started for email:", email);
-    try {
-      const { data, error } = await supabase.auth.signUp({
-        email,
-        password,
-        options: {
-          data: {
-            username,
-          },
-          emailRedirectTo: `${window.location.origin}/auth/callback`,
-        },
-      });
-      
-      if (error) {
-        console.error("[Auth Service] Sign up failed with Supabase error:", error);
-        return { user: null, error };
-      }
-      
-      console.log("[Auth Service] Sign up successful for user ID:", data.user?.id);
-      return { user: data.user, error: null };
-    } catch (err) {
-      console.error("[Auth Service] Sign up failed with unexpected error:", err);
-      throw err;
-    }
+  // ---------------------------------------------------------------------------
+  // Auth Methods
+  // ---------------------------------------------------------------------------
+
+  const sendPhoneOtp = async (phone: string): Promise<SendOtpResponse> => {
+    return await authApi.sendOtp(phone);
   };
 
-  const loginWithPassword = async (email: string, password: string) => {
-    console.log("[Auth Service] Password login started for email:", email);
-    try {
-      const { data, error } = await supabase.auth.signInWithPassword({
-        email,
-        password,
-      });
-      
-      if (error) {
-        console.error("[Auth Service] Password login failed with Supabase error:", error);
-        return { session: null, error };
-      }
-      
-      console.log("[Auth Service] Password login successful. Session user ID:", data.session?.user?.id);
-      return { session: data.session, error: null };
-    } catch (err) {
-      console.error("[Auth Service] Password login failed with unexpected error:", err);
-      throw err;
+  const verifyPhoneOtp = async (
+    phone: string,
+    otp: string,
+    verificationId?: string
+  ): Promise<VerifyOtpResponse> => {
+    const res = await authApi.verifyOtp(phone, otp, verificationId);
+    if (res.success && res.user) {
+      setUser(res.user);
+      localStorage.setItem("isLoggedIn", "true");
+      const authUserId = String(res.user.id || res.user.mobileNumber);
+      const profile = await authService.getFarmerProfile(authUserId);
+      setFarmerProfile(profile);
     }
-  };
-
-  const loginWithOTP = async (email: string, username: string) => {
-    console.log("[Auth Service] OTP login started for email:", email, "username metadata:", username);
-    try {
-      const { error } = await supabase.auth.signInWithOtp({
-        email,
-        options: {
-          shouldCreateUser: true,
-          data: {
-            username,
-          },
-          emailRedirectTo: `${window.location.origin}/auth/callback`,
-        },
-      });
-      
-      if (error) {
-        console.error("[Auth Service] OTP login failed with Supabase error:", error);
-        return { error };
-      }
-      
-      console.log("[Auth Service] OTP request sent successfully by Supabase.");
-      return { error: null };
-    } catch (err) {
-      console.error("[Auth Service] OTP login failed with unexpected error:", err);
-      throw err;
-    }
-  };
-
-  const verifyOTP = async (email: string, token: string) => {
-    console.log("[Auth Service] OTP verification started for email:", email, "token length:", token.length);
-    try {
-      // Try magiclink type first (used for signInWithOtp)
-      let { data, error } = await supabase.auth.verifyOtp({
-        email,
-        token,
-        type: "magiclink",
-      });
-      
-      // If that fails, try signup type (used for signUp verification codes)
-      if (error) {
-        console.log("[Auth Service] Magiclink verification failed, trying signup type. Error info:", error.message);
-        const signupRes = await supabase.auth.verifyOtp({
-          email,
-          token,
-          type: "signup",
-        });
-        if (!signupRes.error) {
-          data = signupRes.data;
-          error = null;
-        } else {
-          // If signup fails as well, return original error or the signup error
-          console.error("[Auth Service] Both magiclink and signup verification failed.");
-          return { session: null, error: signupRes.error };
-        }
-      }
-      
-      console.log("[Auth Service] OTP verification successful. Session user ID:", data.session?.user?.id);
-      return { session: data.session, error: null };
-    } catch (err) {
-      console.error("[Auth Service] OTP verification failed with unexpected error:", err);
-      throw err;
-    }
-  };
-
-  const loginWithGoogle = async () => {
-    const redirectUrl = window.location.origin + "/auth/callback";
-    console.log("[Auth Service] Google OAuth login started. Callback target redirectUrl:", redirectUrl);
-    try {
-      const { error } = await supabase.auth.signInWithOAuth({
-        provider: "google",
-        options: {
-          redirectTo: redirectUrl,
-        },
-      });
-      
-      if (error) {
-        console.error("[Auth Service] Google OAuth sign-in request failed with Supabase error:", error);
-        throw error;
-      }
-      
-      console.log("[Auth Service] Google OAuth redirection initiated successfully.");
-    } catch (err) {
-      console.error("[Auth Service] Google OAuth failed with unexpected error:", err);
-      throw err;
-    }
+    return res;
   };
 
   const logout = async () => {
-    console.log("[Auth Service] Logout request started for active session.");
-    try {
-      const { error } = await supabase.auth.signOut();
-      if (error) {
-        console.error("[Auth Service] Logout failed with Supabase error:", error);
-        throw error;
-      }
-      
-      console.log("[Auth Service] Logout completed successfully.");
-    } catch (err) {
-      console.error("[Auth Service] Logout failed with unexpected error:", err);
-    } finally {
-      setUser(null);
-      setSession(null);
-      localStorage.removeItem("isLoggedIn");
-      localStorage.removeItem("loggedInEmail");
-      localStorage.removeItem("loggedInUsername");
-    }
+    await authApi.logout();
+    setUser(null);
+    setFarmerProfile(null);
+    localStorage.removeItem("isLoggedIn");
+    localStorage.removeItem("jwt_token");
+    localStorage.removeItem("farmer_user");
   };
 
-  const forgotPassword = async (email: string) => {
-    console.log("[Auth Service] Password reset request started for email:", email);
-    try {
-      const { error } = await supabase.auth.resetPasswordForEmail(email, {
-        redirectTo: `${window.location.origin}/reset-password`,
-      });
-      
-      if (error) {
-        console.error("[Auth Service] Password reset link request failed with Supabase error:", error);
-        return { error };
-      }
-      
-      console.log("[Auth Service] Password reset link sent successfully.");
-      return { error: null };
-    } catch (err) {
-      console.error("[Auth Service] Password reset failed with unexpected error:", err);
-      throw err;
+  const saveProfile = async (input: SaveProfileInput) => {
+    const result = await authService.saveFarmerProfile(input);
+    if (result.data) {
+      setFarmerProfile(result.data);
     }
+    return result;
   };
 
-  const updatePassword = async (password: string) => {
-    console.log("[Auth Service] Password update started.");
-    try {
-      const { error } = await supabase.auth.updateUser({
-        password,
-      });
-      
-      if (error) {
-        console.error("[Auth Service] Password update failed with Supabase error:", error);
-        return { error };
-      }
-      
-      console.log("[Auth Service] Password updated successfully.");
-      return { error: null };
-    } catch (err) {
-      console.error("[Auth Service] Password update failed with unexpected error:", err);
-      throw err;
+  const refreshProfile = async (): Promise<FarmerProfile | null> => {
+    if (user) {
+      const authUserId = String(user.id || user.mobileNumber);
+      const prof = await authService.getFarmerProfile(authUserId);
+      setFarmerProfile(prof);
+      return prof;
     }
-  };
-
-  const exchangeCodeForSession = async (code: string) => {
-    console.log("[Auth Service] Exchanging authorization code for session...");
-    try {
-      const { data, error } = await supabase.auth.exchangeCodeForSession(code);
-      if (error) {
-        console.error("[Auth Service] Code exchange failed with Supabase error:", error);
-        return { session: null, error };
-      }
-      
-      console.log("[Auth Service] Code exchange successful. Session user ID:", data.session?.user?.id);
-      return { session: data.session, error: null };
-    } catch (err) {
-      console.error("[Auth Service] Code exchange failed with unexpected error:", err);
-      throw err;
-    }
+    return null;
   };
 
   return (
     <AuthContext.Provider
       value={{
         user,
-        session,
         loading,
-        signUpWithPassword,
-        loginWithPassword,
-        loginWithOTP,
-        verifyOTP,
-        loginWithGoogle,
+        isAuthenticated: user !== null,
+        farmerProfile,
+        sendPhoneOtp,
+        verifyPhoneOtp,
         logout,
-        forgotPassword,
-        updatePassword,
-        exchangeCodeForSession,
+        saveProfile,
+        refreshProfile,
       }}
     >
       {children}
     </AuthContext.Provider>
   );
 };
+
+// ---------------------------------------------------------------------------
+// Hook
+// ---------------------------------------------------------------------------
 
 export const useAuth = () => {
   const context = useContext(AuthContext);
@@ -325,3 +192,4 @@ export const useAuth = () => {
   }
   return context;
 };
+

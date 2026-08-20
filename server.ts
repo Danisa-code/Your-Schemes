@@ -5,6 +5,7 @@ import { createServer as createViteServer } from "vite";
 import { GoogleGenAI, Type } from "@google/genai";
 import { createClient, SupabaseClient } from "@supabase/supabase-js";
 import mandiRoutes from "./backend/routes/mandiRoutes.js";
+import communityRoutes from "./backend/routes/communityRoutes.js";
 import { initScheduler } from "./backend/scraper/cron.js";
 
 dotenv.config();
@@ -27,6 +28,41 @@ if (supabaseUrl && supabaseKey) {
 }
 
 // Lazy initialization of Gemini API Client
+// OpenRouter AI Helper
+async function callOpenRouterAI(messages: any[], jsonMode = false, model = "meta-llama/llama-3.3-70b-instruct"): Promise<string> {
+  const apiKey = process.env.OPENROUTER_API_KEY;
+  if (!apiKey) throw new Error("OPENROUTER_API_KEY is not defined");
+
+  const payload: any = {
+    model: model,
+    messages: messages,
+    max_tokens: 1200,
+    temperature: 0.7,
+  };
+  if (jsonMode) {
+    payload.response_format = { type: "json_object" };
+  }
+
+  const response = await fetch("https://openrouter.ai/api/v1/chat/completions", {
+    method: "POST",
+    headers: {
+      "Authorization": `Bearer ${apiKey}`,
+      "Content-Type": "application/json",
+      "HTTP-Referer": "http://localhost:3000",
+      "X-Title": "Your Schemes Agricultural AI",
+    },
+    body: JSON.stringify(payload),
+  });
+
+  if (!response.ok) {
+    const errorText = await response.text();
+    throw new Error(`OpenRouter HTTP ${response.status}: ${errorText}`);
+  }
+
+  const data = await response.json();
+  return data.choices[0]?.message?.content || "";
+}
+
 let aiClient: GoogleGenAI | null = null;
 
 function getAiClient(): GoogleGenAI {
@@ -74,6 +110,39 @@ app.post("/api/voice-command", async (req, res) => {
       return res.status(400).json({ error: "Missing transcript text" });
     }
 
+    const systemPrompt = `You are the smart voice interpreter for "Your Schemes", a modern Indian agricultural app.
+The user spoken text is: "${text}".
+The current interface language is: "${currentLanguage || "en"}" (supported: "en" for English, "hi" for Hindi, "mr" for Marathi, "te" for Telugu, "pa" for Punjabi, "ta" for Tamil).
+The current screen is: "${currentScreen || "home"}".
+
+Analyze the user's spoken phrase and return a JSON object with:
+{
+  "action": "NAVIGATE" | "FILL_FORM" | "SEARCH" | "CHANGE_LANGUAGE" | "SUBMIT_FORM" | "NONE",
+  "target": "home" | "schemes" | "land" | "profile" | "apply_scheme" | "calculators" | "community" | "mandi_prices" | "",
+  "data": { "searchQuery"?: string, "commodity"?: string, "district"?: string, "languageCode"?: string },
+  "voiceResponse": "Short 1-sentence friendly confirmation in the user's language"
+}
+
+Ensure the response is valid JSON only.`;
+
+    if (process.env.OPENROUTER_API_KEY) {
+      try {
+        const rawJson = await callOpenRouterAI([
+          { role: "system", content: "You are a JSON-only API that maps Indian agricultural voice commands to actions. Always respond in valid JSON." },
+          { role: "user", content: systemPrompt }
+        ], true);
+
+        const cleanJson = rawJson.replace(/```json/g, "").replace(/```/g, "").trim();
+        const parsed = JSON.parse(cleanJson);
+        return res.json({
+          ...parsed,
+          isFallback: false
+        });
+      } catch (orErr: any) {
+        console.warn("[VoiceCommand] OpenRouter NLP error, falling back:", orErr.message);
+      }
+    }
+
     let ai;
     try {
       ai = getAiClient();
@@ -81,48 +150,14 @@ app.post("/api/voice-command", async (req, res) => {
       // Gracefully handle missing API Key
       console.warn("Gemini API client not initialized:", (err as Error).message);
       
-      // Fallback client-side rule processor if API key isn't provided
       return res.json({
         action: "NONE",
         target: "",
         data: {},
-        voiceResponse: `Received: "${text}". Please configure your GEMINI_API_KEY in Settings to enable smart AI voice control.`,
+        voiceResponse: `Received: "${text}".`,
         isFallback: true
       });
     }
-
-    const systemPrompt = `You are the smart voice interpreter for "Your Schemes", a modern, spacious Indian agricultural app.
-The user spoken text is: "${text}".
-The current interface language is: "${currentLanguage || "en"}" (supported: "en" for English, "hi" for Hindi, "mr" for Marathi, "te" for Telugu, "pa" for Punjabi, "ta" for Tamil).
-The current screen is: "${currentScreen || "home"}".
-
-Analyze the user's spoken phrase and map it to a structured action.
-Available actions:
-1. "NAVIGATE": Go to a tab or screen. Target must be one of: "home", "schemes", "land", "profile", "apply_scheme", "calculators", "community", "mandi_prices".
-   Examples: "go to schemes", "show land evaluation", "open my profile", "fill out the scheme application", "home tab details", "open calculators", "show crop profit calculator", "go to community", "crop disease identification scanner", "market prices mandi".
-2. "FILL_FORM": Fill fields on the Schemes Application or Land Details form.
-   Provide data parameters in the 'data' field. Valid keys are:
-   - 'farmerName' (string)
-   - 'phoneNumber' (string)
-   - 'address' (string)
-   - 'cropType' (e.g., "wheat", "rice", "cotton", "sugarcane", "maize")
-   - 'landSize' (number, e.g. 4.2)
-   - 'idType' ("Aadhaar Card", "Voter ID", "PAN Card", "Kisan Credit Card")
-   - 'idNumber' (string)
-   - 'bankName' (string)
-   - 'bankAccount' (string)
-   - 'ifscCode' (string)
-   - 'branchName' (string)
-   Examples: "my name is Rajesh Patel", "set crop to sugarcane", "my phone number is 9876543210", "land size is five acres", "bank account number is 123456789".
-3. "SEARCH": Search for schemes. Set 'data.searchQuery'. Target must be "schemes".
-   Examples: "search for gold loan", "find organic farming schemes", "search tractor".
-4. "CHANGE_LANGUAGE": Switch app language. Set 'data.languageCode' to one of: "en", "hi", "mr", "te", "pa", "ta".
-   Examples: "switch to hindi", "मराठी करा", "change language to punjabi", "english language please", "தெలుగు", "change language to tamil", "தமிழுக்கு மாற்றவும்".
-5. "SUBMIT_FORM": Click the submit button or complete the application.
-   Examples: "submit evaluation", "send form", "apply now", "next step please", "confirm submission".
-
-Produce the output strictly in the requested JSON schema.
-The 'voiceResponse' field must be a short, warm, human-like voice response spoken in the corresponding language of the query or target language (e.g., in Hindi if the command was in Hindi or language changed to Hindi; in Tamil if the command was in Tamil). Keep it encouraging and direct, like a friendly farming helper. Keep it under 15 words.`;
 
     const response = await ai.models.generateContent({
       model: "gemini-3.5-flash",
@@ -192,6 +227,42 @@ app.post("/api/chatbot", async (req, res) => {
 
     const userQuery = message || (messages && messages[messages.length - 1]?.content);
 
+    const systemPrompt = `You are "Your Schemes AI Assistant", an expert agricultural advisor for Indian and Tamil Nadu farmers.
+You assist farmers with:
+1. Government agricultural schemes (PM-KISAN, Kisan Credit Card, Tractor Subsidies, PM-KUSUM Solar Pumps, Crop Insurance, TN Drought Relief).
+2. Live Mandi Market prices, weather forecasts, and harvest tips.
+3. Crop diseases, pest control, organic fertilizer preparation, and soil health.
+4. Step-by-step guidance on applying for subsidies and documentation.
+
+Rules:
+- Provide clear, accurate, and actionable answers.
+- Format responses cleanly with markdown bullet points and headings.
+- Respond in the language of the user's question (fluent Tamil or English).`;
+
+    if (process.env.OPENROUTER_API_KEY) {
+      try {
+        const chatMsgs = [
+          { role: "system", content: systemPrompt },
+          ...(messages && messages.length > 0
+            ? messages.map((m: any) => ({
+                role: m.sender === "user" || m.role === "user" ? "user" : "assistant",
+                content: m.text || m.content || "",
+              }))
+            : [{ role: "user", content: userQuery }]),
+        ];
+
+        const openRouterResponse = await callOpenRouterAI(chatMsgs);
+        if (openRouterResponse) {
+          return res.json({
+            response: openRouterResponse,
+            isFallback: false,
+          });
+        }
+      } catch (orErr: any) {
+        console.warn("[Chatbot] OpenRouter execution failed, falling back:", orErr.message);
+      }
+    }
+
     let ai;
     try {
       ai = getAiClient();
@@ -244,33 +315,14 @@ app.post("/api/chatbot", async (req, res) => {
     }
 
     // Prepare message history structure for Gemini 3.5
-    const systemPrompt = `You are a premium AI Assistant representing Patel Rajeshbhai. He is a high-tech agricultural engineer, landscape photographer, and the creator of this Krishi Sahay portal. 
-
-You should answer questions elegantly, in detail, with a polished corporate portfolio vibe (like Linear or Stripe assistants).
-Use rich Markdown, bullet points, numbered lists, and inline code formatting where relevant.
-
-Information about Rajesh:
-- **About Me**: Rajesh is a pioneer in combining rural wisdom with cutting-edge computer engineering. He graduated with an M.S. in Precision Agriculture and Computer Engineering from IIT Bombay.
-- **Projects**:
-  1. *Krishi Sahay (Our Scheme Portal)*: A React/TypeScript system with dynamic speech synthesis and server-side voice parsing that helps marginal farmers navigate government grants.
-  2. *Smart IoT Micro-Irrigation*: Custom solar-powered telemetry sensors tracking soil moisture & nitrogen, integrated with solenoid drip valves.
-  3. *Canopy Drone Analysis*: Multispectral drone imaging algorithms calculating crop health index and estimating crop yields.
-- **Photography**: Captures rural Indian landscape art, focusing on farmers' daily triumphs, golden hour soil texture, and organic geometry.
-- **Skills**: React 19, TypeScript, Tailwind CSS, Express, Python (AI/ML), D3.js, IoT Telemetry, Soil Hydrology, GIS Mapping, Drone Pilot (Licensed).
-- **Services**:
-  1. *Agri-Tech Consultations*: Setting up precision irrigation, solar-pump telemetry, and crop monitors.
-  2. *Full-Stack Development*: Building web and mobile dashboards for agritech companies.
-  3. *Agri-Photography & Videography*: High-resolution aerial and landscape capture for farms & brands.
-- **Contact**: Email: [rajesh@krishisahay.in](mailto:rajesh@krishisahay.in), Phone: +91 99283-XXXXX. Nashik, India.
-
-Formatting Rules:
-- Support Markdown bold, italic, bullet lists, headers, and hyperlinks. Make links clickable (e.g. [Email Rajesh](mailto:rajesh@krishisahay.in)).
-- Keep answers professional, concise, encouraging, and informative. Always relate questions back to Rajesh's impressive hybrid skill set of computer engineering and agriculture.`;
+    const geminiSystemPrompt = `You are a premium AI Assistant for "Your Schemes".
+You assist Indian and Tamil Nadu farmers with agricultural schemes, subsidies, mandi prices, and crop management.
+Answer clearly, professionally, and encouragingly in the user's language (Tamil or English).`;
 
     const chatSession = ai.chats.create({
       model: "gemini-3.5-flash",
       config: {
-        systemInstruction: systemPrompt,
+        systemInstruction: geminiSystemPrompt,
         temperature: 0.7,
       },
     });
@@ -570,11 +622,45 @@ app.post("/api/verify-otp", async (req, res) => {
   }
 });
 
-
 async function startServer() {
+  // Proxy /api/auth requests to Spring Boot backend on port 8080
+  app.use("/api/auth", async (req, res) => {
+    const targetUrl = `http://localhost:8080/api/auth${req.path}`;
+    try {
+      const headers: Record<string, string> = {
+        "Content-Type": "application/json",
+      };
+      if (req.headers.authorization) {
+        headers["Authorization"] = req.headers.authorization as string;
+      }
+      const springRes = await fetch(targetUrl, {
+        method: req.method,
+        headers,
+        body: ["POST", "PUT", "PATCH"].includes(req.method) ? JSON.stringify(req.body) : undefined,
+      });
+
+      const contentType = springRes.headers.get("content-type");
+      if (contentType && contentType.includes("application/json")) {
+        const data = await springRes.json();
+        return res.status(springRes.status).json(data);
+      } else {
+        const text = await springRes.text();
+        return res.status(springRes.status).send(text);
+      }
+    } catch (err: any) {
+      console.warn("[Spring Proxy] Spring Boot backend (port 8080) unavailable:", err.message);
+      // Fallback for when Spring Boot is starting or standalone Express fallback
+      return res.status(503).json({
+        success: false,
+        message: "Spring Boot authentication server connection pending. Please ensure Spring Boot is running on port 8080."
+      });
+    }
+  });
+
   // ── Register all API routes BEFORE Vite middleware ─────────────────────────
   // This ensures /api/* requests are handled by Express, not Vite's SPA fallback.
   app.use("/api", mandiRoutes);
+  app.use("/api/community", communityRoutes);
 
   if (process.env.NODE_ENV !== "production") {
     const vite = await createViteServer({

@@ -111,12 +111,40 @@ export interface TranslationSet {
   processingImage?: string;
   diseaseReportTitle?: string;
   mandiNav?: string;
+  // --- New: Official Scheme URL / Redirection keys ---
+  applyOnOfficialWebsite?: string;
+  officialGovWebsite?: string;
+  officialGovWebsiteTa?: string;
+  redirectWarningTitle?: string;
+  redirectWarningDesc?: string;
+  redirectWarningNote?: string;
+  continueBtn?: string;
+  cancelBtn?: string;
+  offlineSchemeMsg?: string;
+  offlineSchemeContact?: string;
+  linkUnavailableMsg?: string;
+  verificationRequiredMsg?: string;
+  lastVerified?: string;
+  viewSchemeDetails?: string;
+  schemeGovernmentLevel?: string;
+  schemeDepartment?: string;
+  schemeEligibility?: string;
+  schemeBenefits?: string;
+  schemeDocuments?: string;
+  schemeApplicationType?: string;
+  findNearbyOffice?: string;
 }
 
-export type AppScreen = "home" | "schemes" | "land" | "profile" | "apply_scheme" | "success" | "calculators" | "community" | "disease_detection" | "mandi_prices" | "admin";
+export type AppScreen = "home" | "schemes" | "land" | "profile" | "apply_scheme" | "success" | "calculators" | "community" | "disease_detection" | "mandi_prices" | "admin" | "login" | "dashboard" | "farmer_profile" | "complete_profile";
+
+// --- Verification and Application Type enums ---
+export type VerificationStatus = "VERIFIED" | "VERIFICATION_REQUIRED" | "OFFLINE" | "LINK_UNAVAILABLE";
+export type ApplicationType = "ONLINE" | "OFFLINE" | "BOTH" | "INFORMATION_ONLY";
+export type GovernmentLevel = "CENTRAL" | "TAMIL_NADU" | "CENTRAL_AND_STATE";
 
 export interface Scheme {
   id: string;
+  // Legacy fields (preserved for backward compatibility)
   title: string;
   description: string;
   category: "Government" | "Banking" | "Insurance" | "Machinery";
@@ -128,6 +156,24 @@ export interface Scheme {
   documents?: string[];
   process?: string[];
   lastDate?: string;
+
+  // --- New: Extended scheme data model ---
+  scheme_id?: string;
+  name_ta?: string;                        // Tamil scheme name
+  department?: string;                     // Responsible government department
+  government_level?: GovernmentLevel;      // CENTRAL | TAMIL_NADU | CENTRAL_AND_STATE
+  description_ta?: string;                 // Tamil description
+  eligibility_en?: string;                 // English eligibility criteria
+  eligibility_ta?: string;                 // Tamil eligibility criteria
+  benefits_en?: string;                    // English benefits
+  benefits_ta?: string;                    // Tamil benefits
+  documents_ta?: string[];                 // Tamil document list
+  application_type?: ApplicationType;      // ONLINE | OFFLINE | BOTH | INFORMATION_ONLY
+  official_info_url?: string | null;       // Official scheme information page URL
+  official_application_url?: string | null; // Actual application portal URL
+  official_source_domain?: string | null;  // Domain of the official source
+  last_verified_date?: string | null;      // ISO date when URL was last verified
+  verification_status?: VerificationStatus; // VERIFIED | VERIFICATION_REQUIRED | OFFLINE | LINK_UNAVAILABLE
 }
 
 export interface LandAsset {

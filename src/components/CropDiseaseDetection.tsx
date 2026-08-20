@@ -451,7 +451,7 @@ export const CropDiseaseDetection: React.FC<CropDiseaseDetectionProps> = ({ tran
               exit={{ opacity: 0 }}
               className="mb-4 p-5 rounded-2xl bg-amber-50 dark:bg-amber-900/20 border border-amber-200 dark:border-amber-800/40 flex flex-col items-center gap-3 text-center"
             >
-              <span className="material-symbols-outlined text-4xl text-amber-500">help_outline</span>
+              <span className="material-symbols-outlined text-4xl text-amber-500" style={{ fontVariationSettings: "'FILL' 1" }}>help</span>
               <p className="text-sm font-semibold text-amber-700 dark:text-amber-300">
                 {t(
                   "Unable to identify confidently. Please upload a clearer, well-lit image of the affected leaf or fruit.",

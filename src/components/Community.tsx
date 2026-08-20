@@ -1,227 +1,316 @@
 import React, { useState, useRef, useEffect } from "react";
+import { useGoogleAuth } from "../context/GoogleAuthContext";
 
-interface Post {
-  id: number | string;
+export interface Post {
+  id: string;
   author: string;
+  authorEmail?: string;
+  authorSub?: string;
   avatar: string;
   village: string;
-  date: string;
+  district?: string;
+  createdAt: string;
   title: string;
   content: string;
   tag: "Fertilizer" | "Pest Alert" | "Pumps" | "General" | "Market";
   likes: number;
-  replies: number;
-  isUserPost?: boolean;
+  likedBy?: string[];
+  repliesCount: number;
   isEdited?: boolean;
   editedAt?: string;
 }
 
-const STORAGE_KEY = "your_schemes_community_posts_v2";
-const COMMENTS_STORAGE_KEY = "your_schemes_community_comments_v1";
+export interface Comment {
+  id: string;
+  postId: string;
+  author: string;
+  authorEmail?: string;
+  authorSub?: string;
+  avatar: string;
+  text: string;
+  createdAt: string;
+  likes: number;
+  likedBy?: string[];
+  isEdited?: boolean;
+  editedAt?: string;
+}
 
-const formatDateTime = (dateObj: Date = new Date()): string => {
-  const dateStr = dateObj.toLocaleDateString("en-US", {
-    month: "short",
-    day: "numeric",
-    year: "numeric"
-  });
-  const timeStr = dateObj.toLocaleTimeString("en-US", {
-    hour: "2-digit",
-    minute: "2-digit",
-    hour12: true
-  });
-  return `${dateStr} • ${timeStr}`;
-};
-
-const INITIAL_POSTS: Post[] = [
-  {
-    id: 1,
-    author: "Sukhdev Singh",
-    avatar: "https://lh3.googleusercontent.com/aida-public/AB6AXuD45Exqc7s149CWz_WlS0a8AqTGKdBrWJAgE6Y-lm_1yGbg7jHe01Iy2hfd3FKXiSbTFn3dV2-ikn-9f0nK03xjwhI1fAiqz0GVrjiu-ekf7hsSTdkUTtxSl0ueaC5_r-ev4SMu_-XVNlKyY3MJwQGua1yKxmPIDMxRgaPdhQx4lhlrClITz7EptCbr5BBTDccIAo5Llqu-BpT7rAA_-2456u32EQJWPVE9k-UQEcB0sFLLp_0RRsJ52K7evhhvCGSX4eOJCaccftu8",
-    village: "Niphad, Nashik",
-    date: "Jul 22, 2026 • 08:30 AM",
-    title: "Any grape farmers seeing powdery mildew spots?",
-    content: "Due to the unexpected morning fog and rising humidity in Niphad this week, I noticed some white powdery dust on our grape vine leaves. What organic treatment is recommended? Should I spray neem oil or sulfur?",
-    tag: "Pest Alert",
-    likes: 12,
-    replies: 5,
-    isUserPost: false
-  },
-  {
-    id: 2,
-    author: "Venkata Rao",
-    avatar: "https://lh3.googleusercontent.com/aida-public/AB6AXuD45Exqc7s149CWz_WlS0a8AqTGKdBrWJAgE6Y-lm_1yGbg7jHe01Iy2hfd3FKXiSbTFn3dV2-ikn-9f0nK03xjwhI1fAiqz0GVrjiu-ekf7hsSTdkUTtxSl0ueaC5_r-ev4SMu_-XVNlKyY3MJwQGua1yKxmPIDMxRgaPdhQx4lhlrClITz7EptCbr5BBTDccIAo5Llqu-BpT7rAA_-2456u32EQJWPVE9k-UQEcB0sFLLp_0RRsJ52K7evhhvCGSX4eOJCaccftu8",
-    village: "Sinnar, Maharashtra",
-    date: "Jul 21, 2026 • 04:15 PM",
-    title: "Best ratio of NPK fertilizer for second sugarcane ratoon crop?",
-    content: "I am about to start applying fertilizers on our 4-acre sugarcane fields in Sinnar. Is 150:80:80 NPK ratio standard, or should we increase nitrogen content since we had rain?",
-    tag: "Fertilizer",
-    likes: 8,
-    replies: 3,
-    isUserPost: false
-  },
-  {
-    id: 3,
-    author: "Rajesh Patel (You)",
-    avatar: "https://lh3.googleusercontent.com/aida-public/AB6AXuD45Exqc7s149CWz_WlS0a8AqTGKdBrWJAgE6Y-lm_1yGbg7jHe01Iy2hfd3FKXiSbTFn3dV2-ikn-9f0nK03xjwhI1fAiqz0GVrjiu-ekf7hsSTdkUTtxSl0ueaC5_r-ev4SMu_-XVNlKyY3MJwQGua1yKxmPIDMxRgaPdhQx4lhlrClITz7EptCbr5BBTDccIAo5Llqu-BpT7rAA_-2456u32EQJWPVE9k-UQEcB0sFLLp_0RRsJ52K7evhhvCGSX4eOJCaccftu8",
-    village: "Dindori, Nashik",
-    date: "Jul 22, 2026 • 10:15 AM",
-    title: "Solar drip irrigation setup query for 5-acre farm",
-    content: "Has anyone recently installed a 5HP solar pump with subsidy under PM-KUSUM scheme? Looking for feedback on maintenance and water flow rate during cloud cover.",
-    tag: "Pumps",
-    likes: 4,
-    replies: 2,
-    isUserPost: true
+const formatDateTime = (dateStr: string): string => {
+  try {
+    const dateObj = new Date(dateStr);
+    const d = dateObj.toLocaleDateString("en-IN", {
+      month: "short",
+      day: "numeric",
+      year: "numeric",
+    });
+    const t = dateObj.toLocaleTimeString("en-IN", {
+      hour: "2-digit",
+      minute: "2-digit",
+      hour12: true,
+    });
+    return `${d} • ${t}`;
+  } catch {
+    return dateStr;
   }
-];
+};
 
 export const Community: React.FC<{ lang: string }> = ({ lang }) => {
   const isTamil = lang === "ta";
+  const { user: googleUser, isSignedIn } = useGoogleAuth();
   const [activeTab, setActiveTab] = useState<"forum" | "disease" | "mandi" | "loans">("forum");
 
-  // ==================== 1. FARMER FORUM STATE ====================
-  const [posts, setPosts] = useState<Post[]>(() => {
-    if (typeof window !== "undefined") {
-      const saved = localStorage.getItem(STORAGE_KEY);
-      if (saved) {
-        try { return JSON.parse(saved); } catch (e) { console.error("Failed to load posts", e); }
-      }
-    }
-    return INITIAL_POSTS;
-  });
+  // ==================== 1. REAL-TIME FARMER FORUM STATE ====================
+  const [posts, setPosts] = useState<Post[]>([]);
+  const [loadingPosts, setLoadingPosts] = useState(true);
+  const [isLiveConnected, setIsLiveConnected] = useState(false);
+  const [forumError, setForumError] = useState<string | null>(null);
+
+  // Filter tag
+  const [selectedFilterTag, setSelectedFilterTag] = useState<string>("All");
 
   // Comments state: { [postId]: Comment[] }
-  interface Comment {
-    id: number;
-    author: string;
-    text: string;
-    date: string;
-    likes: number;
-    isUserComment: boolean;
-    isEdited?: boolean;
-  }
-  const [comments, setComments] = useState<Record<string | number, Comment[]>>(() => {
-    if (typeof window !== "undefined") {
-      const saved = localStorage.getItem(COMMENTS_STORAGE_KEY);
-      if (saved) {
-        try { return JSON.parse(saved); } catch { return {}; }
-      }
-    }
-    return {};
-  });
-  const [expandedComments, setExpandedComments] = useState<Record<string | number, boolean>>({});
-  const [newCommentText, setNewCommentText] = useState<Record<string | number, string>>({});
-  const [editingCommentId, setEditingCommentId] = useState<number | null>(null);
+  const [comments, setComments] = useState<Record<string, Comment[]>>({});
+  const [loadingComments, setLoadingComments] = useState<Record<string, boolean>>({});
+  const [expandedComments, setExpandedComments] = useState<Record<string, boolean>>({});
+  const [newCommentText, setNewCommentText] = useState<Record<string, string>>({});
+  const [submittingComment, setSubmittingComment] = useState<Record<string, boolean>>({});
+  const [editingCommentId, setEditingCommentId] = useState<string | null>(null);
   const [editCommentText, setEditCommentText] = useState("");
 
-  useEffect(() => {
-    if (typeof window !== "undefined") {
-      localStorage.setItem(STORAGE_KEY, JSON.stringify(posts));
-    }
-  }, [posts]);
-
-  useEffect(() => {
-    if (typeof window !== "undefined") {
-      localStorage.setItem(COMMENTS_STORAGE_KEY, JSON.stringify(comments));
-    }
-  }, [comments]);
-
-  // OFFENSIVE WORD FILTER (basic spam guard)
-  const BANNED_WORDS = ["spam", "abuse", "xxx", "hate"];
-  const containsOffensiveContent = (text: string) =>
-    BANNED_WORDS.some(w => text.toLowerCase().includes(w));
-
-  const handleAddComment = (postId: number | string) => {
-    const text = (newCommentText[postId] || "").trim();
-    if (!text) return;
-    if (containsOffensiveContent(text)) {
-      alert(isTamil ? "உங்கள் கருத்தில் ஏற்றுக்கொள்ள முடியாத வார்த்தைகள் உள்ளன." : "Your comment contains inappropriate content.");
-      return;
-    }
-    const comment: Comment = {
-      id: Date.now(),
-      author: isTamil ? "ராஜேஷ் பட்டேல் (நீங்கள்)" : "Rajesh Patel (You)",
-      text,
-      date: formatDateTime(new Date()),
-      likes: 0,
-      isUserComment: true,
-    };
-    setComments(prev => ({ ...prev, [postId]: [comment, ...(prev[postId] || [])] }));
-    setNewCommentText(prev => ({ ...prev, [postId]: "" }));
-  };
-
-  const handleEditComment = (postId: number | string, commentId: number) => {
-    if (!editCommentText.trim()) return;
-    if (containsOffensiveContent(editCommentText)) {
-      alert(isTamil ? "தவறான உள்ளடக்கம் உள்ளது." : "Inappropriate content detected.");
-      return;
-    }
-    setComments(prev => ({
-      ...prev,
-      [postId]: (prev[postId] || []).map(c =>
-        c.id === commentId ? { ...c, text: editCommentText.trim(), isEdited: true } : c
-      ),
-    }));
-    setEditingCommentId(null);
-    setEditCommentText("");
-  };
-
-  const handleDeleteComment = (postId: number | string, commentId: number) => {
-    if (!window.confirm(isTamil ? "இந்த கருத்தை நீக்கவா?" : "Delete this comment?")) return;
-    setComments(prev => ({
-      ...prev,
-      [postId]: (prev[postId] || []).filter(c => c.id !== commentId),
-    }));
-  };
-
-  const handleLikeComment = (postId: number | string, commentId: number) => {
-    setComments(prev => ({
-      ...prev,
-      [postId]: (prev[postId] || []).map(c =>
-        c.id === commentId ? { ...c, likes: c.likes + 1 } : c
-      ),
-    }));
-  };
-
+  // Post creation state
   const [newPostTitle, setNewPostTitle] = useState("");
   const [newPostContent, setNewPostContent] = useState("");
   const [newPostTag, setNewPostTag] = useState<Post["tag"]>("General");
+  const [newPostVillage, setNewPostVillage] = useState("");
+  const [guestAuthorName, setGuestAuthorName] = useState("");
+  const [isSubmittingPost, setIsSubmittingPost] = useState(false);
 
   // Edit post state
-  const [editingPostId, setEditingPostId] = useState<number | string | null>(null);
+  const [editingPostId, setEditingPostId] = useState<string | null>(null);
   const [editTitle, setEditTitle] = useState("");
   const [editContent, setEditContent] = useState("");
   const [editTag, setEditTag] = useState<Post["tag"]>("General");
+  const [isSavingEdit, setIsSavingEdit] = useState(false);
 
   // Delete post state
-  const [deletingPostId, setDeletingPostId] = useState<number | string | null>(null);
+  const [deletingPostId, setDeletingPostId] = useState<string | null>(null);
 
-  const handleCreatePost = (e: React.FormEvent) => {
+  // Current active user identifier
+  const currentUserId = googleUser?.sub || googleUser?.email || "anonymous_farmer";
+  const currentUserName = googleUser?.name || guestAuthorName.trim() || "Farmer";
+  const currentUserAvatar = googleUser?.picture || "https://lh3.googleusercontent.com/a/default-user=s96-c";
+
+  // Fetch initial posts from real backend API
+  const fetchPosts = async () => {
+    try {
+      setLoadingPosts(true);
+      setForumError(null);
+      const url = selectedFilterTag === "All" ? "/api/community/posts" : `/api/community/posts?tag=${encodeURIComponent(selectedFilterTag)}`;
+      const res = await fetch(url);
+      if (!res.ok) throw new Error("Failed to load community posts from server");
+      const data = await res.json();
+      setPosts(data);
+    } catch (err: any) {
+      console.error("[Community] Error fetching posts:", err);
+      setForumError(err.message || "Failed to load posts.");
+    } finally {
+      setLoadingPosts(false);
+    }
+  };
+
+  useEffect(() => {
+    fetchPosts();
+  }, [selectedFilterTag]);
+
+  // Connect to Real-time Server-Sent Events (SSE) Stream
+  useEffect(() => {
+    let eventSource: EventSource | null = null;
+
+    try {
+      eventSource = new EventSource("/api/community/events");
+
+      eventSource.onopen = () => {
+        setIsLiveConnected(true);
+      };
+
+      eventSource.onmessage = (e) => {
+        try {
+          const parsed = JSON.parse(e.data);
+          if (!parsed.type) return;
+
+          switch (parsed.type) {
+            case "CONNECTED":
+              setIsLiveConnected(true);
+              break;
+
+            case "POST_CREATED":
+              setPosts((prev) => {
+                // Prevent duplicate insertion
+                if (prev.some((p) => p.id === parsed.payload.id)) return prev;
+                return [parsed.payload, ...prev];
+              });
+              break;
+
+            case "POST_UPDATED":
+              setPosts((prev) =>
+                prev.map((p) => (p.id === parsed.payload.id ? { ...p, ...parsed.payload } : p))
+              );
+              break;
+
+            case "POST_DELETED":
+              setPosts((prev) => prev.filter((p) => p.id !== parsed.payload.id));
+              setComments((prev) => {
+                const copy = { ...prev };
+                delete copy[parsed.payload.id];
+                return copy;
+              });
+              break;
+
+            case "POST_LIKED":
+              setPosts((prev) =>
+                prev.map((p) =>
+                  p.id === parsed.payload.id
+                    ? { ...p, likes: parsed.payload.likes, likedBy: parsed.payload.likedBy }
+                    : p
+                )
+              );
+              break;
+
+            case "COMMENT_CREATED":
+              const { comment, postId, repliesCount } = parsed.payload;
+              setComments((prev) => ({
+                ...prev,
+                [postId]: [...(prev[postId] || []).filter((c) => c.id !== comment.id), comment],
+              }));
+              setPosts((prev) =>
+                prev.map((p) => (p.id === postId ? { ...p, repliesCount } : p))
+              );
+              break;
+
+            case "COMMENT_UPDATED":
+              const updatedComment = parsed.payload;
+              setComments((prev) => ({
+                ...prev,
+                [updatedComment.postId]: (prev[updatedComment.postId] || []).map((c) =>
+                  c.id === updatedComment.id ? updatedComment : c
+                ),
+              }));
+              break;
+
+            case "COMMENT_DELETED":
+              const { commentId, postId: commentPostId, repliesCount: updatedRepliesCount } = parsed.payload;
+              setComments((prev) => ({
+                ...prev,
+                [commentPostId]: (prev[commentPostId] || []).filter((c) => c.id !== commentId),
+              }));
+              setPosts((prev) =>
+                prev.map((p) => (p.id === commentPostId ? { ...p, repliesCount: updatedRepliesCount } : p))
+              );
+              break;
+
+            case "COMMENT_LIKED":
+              const { commentId: lId, postId: lPostId, likes: lLikes, likedBy: lLikedBy } = parsed.payload;
+              setComments((prev) => ({
+                ...prev,
+                [lPostId]: (prev[lPostId] || []).map((c) =>
+                  c.id === lId ? { ...c, likes: lLikes, likedBy: lLikedBy } : c
+                ),
+              }));
+              break;
+          }
+        } catch (err) {
+          console.warn("[Community SSE] Parsing error:", err);
+        }
+      };
+
+      eventSource.onerror = () => {
+        setIsLiveConnected(false);
+      };
+    } catch (err) {
+      console.warn("[Community] SSE initialization error:", err);
+      setIsLiveConnected(false);
+    }
+
+    return () => {
+      if (eventSource) {
+        eventSource.close();
+      }
+    };
+  }, []);
+
+  // Fetch comments for a post when expanded
+  const toggleComments = async (postId: string) => {
+    const nextState = !expandedComments[postId];
+    setExpandedComments((prev) => ({ ...prev, [postId]: nextState }));
+
+    if (nextState && !comments[postId]) {
+      try {
+        setLoadingComments((prev) => ({ ...prev, [postId]: true }));
+        const res = await fetch(`/api/community/posts/${postId}/comments`);
+        if (res.ok) {
+          const data = await res.json();
+          setComments((prev) => ({ ...prev, [postId]: data }));
+        }
+      } catch (err) {
+        console.error("Error loading comments:", err);
+      } finally {
+        setLoadingComments((prev) => ({ ...prev, [postId]: false }));
+      }
+    }
+  };
+
+  // Create Post
+  const handleCreatePost = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!newPostTitle.trim() || !newPostContent.trim()) return;
 
-    const formattedDateTime = formatDateTime(new Date());
+    try {
+      setIsSubmittingPost(true);
+      const res = await fetch("/api/community/posts", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          author: currentUserName,
+          authorEmail: googleUser?.email,
+          authorSub: googleUser?.sub,
+          avatar: currentUserAvatar,
+          village: newPostVillage.trim() || "Tamil Nadu",
+          title: newPostTitle.trim(),
+          content: newPostContent.trim(),
+          tag: newPostTag,
+        }),
+      });
 
-    const post: Post = {
-      id: Date.now(),
-      author: "Rajesh Patel (You)",
-      avatar: "https://lh3.googleusercontent.com/aida-public/AB6AXuD45Exqc7s149CWz_WlS0a8AqTGKdBrWJAgE6Y-lm_1yGbg7jHe01Iy2hfd3FKXiSbTFn3dV2-ikn-9f0nK03xjwhI1fAiqz0GVrjiu-ekf7hsSTdkUTtxSl0ueaC5_r-ev4SMu_-XVNlKyY3MJwQGua1yKxmPIDMxRgaPdhQx4lhlrClITz7EptCbr5BBTDccIAo5Llqu-BpT7rAA_-2456u32EQJWPVE9k-UQEcB0sFLLp_0RRsJ52K7evhhvCGSX4eOJCaccftu8",
-      village: "Dindori, Nashik",
-      date: formattedDateTime,
-      title: newPostTitle.trim(),
-      content: newPostContent.trim(),
-      tag: newPostTag,
-      likes: 0,
-      replies: 0,
-      isUserPost: true
-    };
+      if (!res.ok) {
+        const errorData = await res.json();
+        throw new Error(errorData.error || "Failed to create post.");
+      }
 
-    setPosts([post, ...posts]);
-    setNewPostTitle("");
-    setNewPostContent("");
-    setNewPostTag("General");
+      setNewPostTitle("");
+      setNewPostContent("");
+      setNewPostTag("General");
+      setNewPostVillage("");
+    } catch (err: any) {
+      alert(err.message || "Failed to publish post.");
+    } finally {
+      setIsSubmittingPost(false);
+    }
   };
 
+  // Like / Unlike Post
+  const handleLikePost = async (postId: string) => {
+    try {
+      await fetch(`/api/community/posts/${postId}/like`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ userId: currentUserId }),
+      });
+    } catch (err) {
+      console.error("Like post error:", err);
+    }
+  };
+
+  // Edit Post
   const handleStartEdit = (post: Post) => {
     setEditingPostId(post.id);
     setEditTitle(post.title);
@@ -230,54 +319,173 @@ export const Community: React.FC<{ lang: string }> = ({ lang }) => {
     setDeletingPostId(null);
   };
 
-  const handleCancelEdit = () => {
-    setEditingPostId(null);
-    setEditTitle("");
-    setEditContent("");
-  };
-
-  const handleSaveEdit = (e: React.FormEvent) => {
+  const handleSaveEdit = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!editTitle.trim() || !editContent.trim() || !editingPostId) return;
 
-    const formattedEditedAt = formatDateTime(new Date());
+    try {
+      setIsSavingEdit(true);
+      const res = await fetch(`/api/community/posts/${editingPostId}`, {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          title: editTitle.trim(),
+          content: editContent.trim(),
+          tag: editTag,
+          userSub: googleUser?.sub,
+          userEmail: googleUser?.email,
+        }),
+      });
 
-    setPosts(prev =>
-      prev.map(p => {
-        if (p.id === editingPostId) {
-          return {
-            ...p,
-            title: editTitle.trim(),
-            content: editContent.trim(),
-            tag: editTag,
-            isEdited: true,
-            editedAt: formattedEditedAt
-          };
-        }
-        return p;
-      })
-    );
+      if (!res.ok) {
+        const errorData = await res.json();
+        throw new Error(errorData.error || "Failed to update post.");
+      }
 
-    setEditingPostId(null);
-    setEditTitle("");
-    setEditContent("");
-  };
-
-  const handleConfirmDelete = (id: number | string) => {
-    setPosts(prev => prev.filter(p => p.id !== id));
-    if (deletingPostId === id) setDeletingPostId(null);
-    if (editingPostId === id) setEditingPostId(null);
-  };
-
-  const handleLikePost = (id: number | string) => {
-    setPosts(prev => prev.map(p => p.id === id ? { ...p, likes: p.likes + 1 } : p));
-  };
-
-  const handleResetPosts = () => {
-    if (window.confirm("Reset discussion feed back to default posts?")) {
-      setPosts(INITIAL_POSTS);
-      localStorage.removeItem(STORAGE_KEY);
+      setEditingPostId(null);
+      setEditTitle("");
+      setEditContent("");
+    } catch (err: any) {
+      alert(err.message || "Failed to update post.");
+    } finally {
+      setIsSavingEdit(false);
     }
+  };
+
+  // Delete Post
+  const handleConfirmDelete = async (postId: string) => {
+    try {
+      const res = await fetch(`/api/community/posts/${postId}`, {
+        method: "DELETE",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          userSub: googleUser?.sub,
+          userEmail: googleUser?.email,
+        }),
+      });
+
+      if (!res.ok) {
+        const errorData = await res.json();
+        throw new Error(errorData.error || "Failed to delete post.");
+      }
+
+      setDeletingPostId(null);
+    } catch (err: any) {
+      alert(err.message || "Failed to delete post.");
+    }
+  };
+
+  // Add Comment
+  const handleAddComment = async (postId: string) => {
+    const text = (newCommentText[postId] || "").trim();
+    if (!text) return;
+
+    try {
+      setSubmittingComment((prev) => ({ ...prev, [postId]: true }));
+      const res = await fetch(`/api/community/posts/${postId}/comments`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          author: currentUserName,
+          authorEmail: googleUser?.email,
+          authorSub: googleUser?.sub,
+          avatar: currentUserAvatar,
+          text,
+        }),
+      });
+
+      if (!res.ok) {
+        const errorData = await res.json();
+        throw new Error(errorData.error || "Failed to submit comment.");
+      }
+
+      setNewCommentText((prev) => ({ ...prev, [postId]: "" }));
+    } catch (err: any) {
+      alert(err.message || "Failed to add comment.");
+    } finally {
+      setSubmittingComment((prev) => ({ ...prev, [postId]: false }));
+    }
+  };
+
+  // Like Comment
+  const handleLikeComment = async (commentId: string) => {
+    try {
+      await fetch(`/api/community/comments/${commentId}/like`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ userId: currentUserId }),
+      });
+    } catch (err) {
+      console.error("Like comment error:", err);
+    }
+  };
+
+  // Edit Comment
+  const handleEditComment = async (commentId: string) => {
+    if (!editCommentText.trim()) return;
+
+    try {
+      const res = await fetch(`/api/community/comments/${commentId}`, {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          text: editCommentText.trim(),
+          userSub: googleUser?.sub,
+        }),
+      });
+
+      if (!res.ok) {
+        const errorData = await res.json();
+        throw new Error(errorData.error || "Failed to edit comment.");
+      }
+
+      setEditingCommentId(null);
+      setEditCommentText("");
+    } catch (err: any) {
+      alert(err.message || "Failed to edit comment.");
+    }
+  };
+
+  // Delete Comment
+  const handleDeleteComment = async (commentId: string) => {
+    if (!window.confirm(isTamil ? "இந்த கருத்தை நீக்கவா?" : "Delete this comment?")) return;
+
+    try {
+      const res = await fetch(`/api/community/comments/${commentId}`, {
+        method: "DELETE",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ userSub: googleUser?.sub }),
+      });
+
+      if (!res.ok) {
+        const errorData = await res.json();
+        throw new Error(errorData.error || "Failed to delete comment.");
+      }
+    } catch (err: any) {
+      alert(err.message || "Failed to delete comment.");
+    }
+  };
+
+  // Check if active user is post author
+  const isPostAuthor = (post: Post) => {
+    if (googleUser?.sub && post.authorSub) {
+      return googleUser.sub === post.authorSub;
+    }
+    if (googleUser?.email && post.authorEmail) {
+      return googleUser.email === post.authorEmail;
+    }
+    return post.author === currentUserName && currentUserName !== "Farmer";
+  };
+
+  // Check if active user is comment author
+  const isCommentAuthor = (comment: Comment) => {
+    if (googleUser?.sub && comment.authorSub) {
+      return googleUser.sub === comment.authorSub;
+    }
+    if (googleUser?.email && comment.authorEmail) {
+      return googleUser.email === comment.authorEmail;
+    }
+    return comment.author === currentUserName && currentUserName !== "Farmer";
   };
 
   // ==================== 2. CROP DISEASE SCANNER STATE ====================
@@ -329,7 +537,6 @@ export const Community: React.FC<{ lang: string }> = ({ lang }) => {
     setScanResult(null);
     setTimeout(() => {
       setIsScanning(false);
-      // Pick a random disease for the interactive demo
       const randomDisease = mockDiseases[Math.floor(Math.random() * mockDiseases.length)];
       setScanResult(randomDisease);
     }, 2500);
@@ -346,7 +553,6 @@ export const Community: React.FC<{ lang: string }> = ({ lang }) => {
     { crop: "Gram (Chana)", season: "Rabi 2025-26", msp: 5440, change: 105 }
   ];
 
-  // Mandi prices — Tamil Nadu APMC markets
   const mandiPrices = [
     { item: "Tomato", APMC: "Ammapet, Salem", low: 800, high: 1600, modal: 1200, unit: "Quintal" },
     { item: "Onion", APMC: "Singanallur, Coimbatore", low: 1200, high: 2000, modal: 1600, unit: "Quintal" },
@@ -360,11 +566,20 @@ export const Community: React.FC<{ lang: string }> = ({ lang }) => {
       {/* Tab Navigation header */}
       <div className="flex justify-between items-center flex-wrap gap-4 border-b border-slate-100 pb-4">
         <div>
-          <h3 className="text-xl font-bold text-slate-900 font-display flex items-center gap-2">
-            <span className="material-symbols-outlined text-primary" style={{ fontVariationSettings: "'FILL' 1" }}>groups</span>
-            Community & Market Hub
-          </h3>
-          <p className="text-slate-500 text-xs mt-0.5">Interact with other farmers, identify crop diseases, and track Mandi prices.</p>
+          <div className="flex items-center gap-2">
+            <h3 className="text-xl font-bold text-slate-900 font-display flex items-center gap-2">
+              <span className="material-symbols-outlined text-[#0F5238]" style={{ fontVariationSettings: "'FILL' 1" }}>groups</span>
+              Community & Market Hub
+            </h3>
+            {/* Live SSE Status Badge */}
+            <span className={`inline-flex items-center gap-1 px-2.5 py-0.5 rounded-full text-[10px] font-bold ${
+              isLiveConnected ? "bg-emerald-100 text-emerald-800" : "bg-slate-100 text-slate-600"
+            }`}>
+              <span className={`w-1.5 h-1.5 rounded-full ${isLiveConnected ? "bg-emerald-500 animate-pulse" : "bg-slate-400"}`}></span>
+              {isLiveConnected ? (isTamil ? "நேரலை இணைப்பு" : "Live Sync Active") : (isTamil ? "இணைக்கிறது..." : "Connecting...")}
+            </span>
+          </div>
+          <p className="text-slate-500 text-xs mt-0.5">Interact in real-time with fellow farmers across Tamil Nadu, identify crop diseases, and track prices.</p>
         </div>
 
         <div className="flex gap-1.5 overflow-x-auto pb-1 scrollbar-hide">
@@ -390,23 +605,71 @@ export const Community: React.FC<{ lang: string }> = ({ lang }) => {
         </div>
       </div>
 
-      {/* ==================== SCREEN 1: FARMER COMMUNITY FORUM ==================== */}
+      {/* ==================== SCREEN 1: REAL-TIME FARMER COMMUNITY FORUM ==================== */}
       {activeTab === "forum" && (
         <div className="grid grid-cols-1 lg:grid-cols-12 gap-8 animate-scale-in">
           {/* Post creation form (Left 5 Cols) */}
           <div className="lg:col-span-5 space-y-4 bg-slate-50 p-5 rounded-2xl border border-slate-150">
-            <h4 className="font-bold text-sm text-slate-800 uppercase tracking-wider flex items-center gap-1.5">
-              <span className="material-symbols-outlined text-[#0F5238] text-lg">edit_note</span>
-              Share with Community
-            </h4>
-            <p className="text-xs text-slate-500 leading-normal">Ask a query or post a local weather, water, or pest alert for nearby farmers.</p>
+            <div className="flex items-center justify-between">
+              <h4 className="font-bold text-sm text-slate-800 uppercase tracking-wider flex items-center gap-1.5">
+                <span className="material-symbols-outlined text-[#0F5238] text-lg">edit_note</span>
+                Share with Community
+              </h4>
+              {isSignedIn && googleUser && (
+                <span className="text-[10px] text-emerald-700 font-semibold flex items-center gap-1">
+                  <span className="material-symbols-outlined text-xs">account_circle</span>
+                  {googleUser.given_name || googleUser.name}
+                </span>
+              )}
+            </div>
+            <p className="text-xs text-slate-500 leading-normal">
+              Ask a query, report a pest outbreak, or share water & weather updates. All farmers will see your post live immediately.
+            </p>
 
             <form onSubmit={handleCreatePost} className="space-y-3.5 pt-2">
+              {!isSignedIn && (
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
+                  <div className="flex flex-col gap-1">
+                    <label className="text-[10px] text-slate-500 font-semibold">Your Name</label>
+                    <input
+                      type="text"
+                      placeholder="e.g. Murugan S"
+                      value={guestAuthorName}
+                      onChange={(e) => setGuestAuthorName(e.target.value)}
+                      className="h-9 px-3 bg-white border border-slate-200 rounded-xl text-xs font-semibold focus:outline-none focus:border-primary"
+                    />
+                  </div>
+                  <div className="flex flex-col gap-1">
+                    <label className="text-[10px] text-slate-500 font-semibold">Village / District</label>
+                    <input
+                      type="text"
+                      placeholder="e.g. Pollachi, Coimbatore"
+                      value={newPostVillage}
+                      onChange={(e) => setNewPostVillage(e.target.value)}
+                      className="h-9 px-3 bg-white border border-slate-200 rounded-xl text-xs font-semibold focus:outline-none focus:border-primary"
+                    />
+                  </div>
+                </div>
+              )}
+
+              {isSignedIn && (
+                <div className="flex flex-col gap-1">
+                  <label className="text-[10px] text-slate-500 font-semibold">Village / District (Optional)</label>
+                  <input
+                    type="text"
+                    placeholder="e.g. Salem / Thanjavur / Madurai"
+                    value={newPostVillage}
+                    onChange={(e) => setNewPostVillage(e.target.value)}
+                    className="h-9 px-3 bg-white border border-slate-200 rounded-xl text-xs font-semibold focus:outline-none focus:border-primary"
+                  />
+                </div>
+              )}
+
               <div className="flex flex-col gap-1">
                 <label className="text-xs text-slate-500 font-semibold">Post Title</label>
                 <input
                   type="text"
-                  placeholder="e.g. Yellowing leaves in sugarcanes..."
+                  placeholder="e.g. Yellowing leaves in sugarcane crops..."
                   value={newPostTitle}
                   onChange={(e) => setNewPostTitle(e.target.value)}
                   className="h-10 px-3 bg-white border border-slate-200 rounded-xl text-xs font-bold focus:outline-none focus:border-primary"
@@ -446,39 +709,80 @@ export const Community: React.FC<{ lang: string }> = ({ lang }) => {
 
               <button
                 type="submit"
-                className="w-full h-11 bg-primary hover:bg-emerald-800 text-white rounded-xl text-xs font-bold transition flex items-center justify-center gap-2 border-none cursor-pointer shadow-sm"
+                disabled={isSubmittingPost || !newPostTitle.trim() || !newPostContent.trim()}
+                className="w-full h-11 bg-primary hover:bg-emerald-800 disabled:opacity-50 text-white rounded-xl text-xs font-bold transition flex items-center justify-center gap-2 border-none cursor-pointer shadow-sm"
               >
-                <span className="material-symbols-outlined text-sm">send</span>
-                <span>Publish Post to Forum</span>
+                {isSubmittingPost ? (
+                  <>
+                    <span className="material-symbols-outlined text-sm animate-spin">sync</span>
+                    <span>Publishing...</span>
+                  </>
+                ) : (
+                  <>
+                    <span className="material-symbols-outlined text-sm">send</span>
+                    <span>Publish Live Post to Forum</span>
+                  </>
+                )}
               </button>
             </form>
           </div>
 
           {/* Posts feed (Right 7 Cols) */}
           <div className="lg:col-span-7 space-y-4">
-            <div className="flex justify-between items-center">
-              <h4 className="font-bold text-sm text-slate-800 uppercase tracking-wider">Local Farmers Discussion Feed</h4>
-              <button
-                onClick={handleResetPosts}
-                title="Reset feed to sample posts"
-                className="text-[11px] text-slate-400 hover:text-slate-600 font-semibold underline bg-transparent border-none cursor-pointer"
-              >
-                Reset Feed
-              </button>
+            <div className="flex justify-between items-center flex-wrap gap-2">
+              <h4 className="font-bold text-sm text-slate-800 uppercase tracking-wider">Live Farmers Discussion Feed</h4>
+              
+              {/* Category Filter Chips */}
+              <div className="flex gap-1 overflow-x-auto">
+                {["All", "Pest Alert", "Fertilizer", "Pumps", "Market", "General"].map((t) => (
+                  <button
+                    key={t}
+                    onClick={() => setSelectedFilterTag(t)}
+                    className={`px-2.5 py-1 rounded-full text-[10px] font-bold border transition cursor-pointer ${
+                      selectedFilterTag === t
+                        ? "bg-slate-900 text-white border-slate-900"
+                        : "bg-white text-slate-600 border-slate-200 hover:bg-slate-50"
+                    }`}
+                  >
+                    {t}
+                  </button>
+                ))}
+              </div>
             </div>
             
-            <div className="space-y-4 max-h-[520px] overflow-y-auto pr-1 scrollbar-hide">
-              {posts.length === 0 ? (
-                <div className="p-8 text-center bg-slate-50 rounded-2xl border border-dashed border-slate-200 space-y-2">
-                  <span className="material-symbols-outlined text-3xl text-slate-400">forum</span>
-                  <p className="text-xs font-bold text-slate-600">No posts in community feed yet.</p>
-                  <p className="text-[11px] text-slate-400">Use the form on the left to share your first post with fellow farmers!</p>
+            <div className="space-y-4 max-h-[580px] overflow-y-auto pr-1 scrollbar-hide">
+              {loadingPosts ? (
+                <div className="p-12 text-center bg-slate-50 rounded-2xl border border-slate-100 flex flex-col items-center justify-center gap-2">
+                  <span className="material-symbols-outlined text-3xl text-emerald-600 animate-spin">sync</span>
+                  <p className="text-xs text-slate-500 font-semibold">Loading real-time community feed...</p>
+                </div>
+              ) : forumError ? (
+                <div className="p-8 text-center bg-red-50 rounded-2xl border border-red-100 space-y-2">
+                  <span className="material-symbols-outlined text-3xl text-red-500">error</span>
+                  <p className="text-xs font-bold text-red-700">{forumError}</p>
+                  <button
+                    onClick={fetchPosts}
+                    className="px-4 py-1.5 bg-red-600 hover:bg-red-700 text-white text-xs font-bold rounded-lg cursor-pointer border-none"
+                  >
+                    Retry Loading
+                  </button>
+                </div>
+              ) : posts.length === 0 ? (
+                <div className="p-12 text-center bg-slate-50 rounded-2xl border border-dashed border-slate-200 space-y-3">
+                  <div className="w-14 h-14 rounded-full bg-emerald-50 text-emerald-600 flex items-center justify-center mx-auto">
+                    <span className="material-symbols-outlined text-3xl">forum</span>
+                  </div>
+                  <h5 className="text-sm font-bold text-slate-800">No community posts yet</h5>
+                  <p className="text-xs text-slate-500 max-w-sm mx-auto leading-relaxed">
+                    Be the first farmer to share a question, weather update, or farming tip with the community using the form on the left!
+                  </p>
                 </div>
               ) : (
                 posts.map((post) => {
-                  const isUserAuthor = Boolean(post.isUserPost || post.author.toLowerCase().includes("(you)"));
+                  const isAuthor = isPostAuthor(post);
                   const isEditingThisPost = editingPostId === post.id;
                   const isDeletingThisPost = deletingPostId === post.id;
+                  const hasLiked = Boolean(post.likedBy && post.likedBy.includes(currentUserId));
 
                   return (
                     <div key={post.id} className="bg-white border border-slate-200 rounded-2xl p-5 hover:shadow-md transition duration-300 text-left space-y-3">
@@ -492,7 +796,7 @@ export const Community: React.FC<{ lang: string }> = ({ lang }) => {
                           <div className="text-left">
                             <div className="flex items-center gap-2">
                               <h5 className="font-bold text-slate-900 text-xs">{post.author}</h5>
-                              {isUserAuthor && (
+                              {isAuthor && (
                                 <span className="px-1.5 py-0.2 bg-emerald-100 text-emerald-800 text-[9px] font-black uppercase rounded">
                                   Your Post
                                 </span>
@@ -504,9 +808,9 @@ export const Community: React.FC<{ lang: string }> = ({ lang }) => {
                               <span>{post.village}</span>
                               <span>•</span>
                               <span className="material-symbols-outlined text-[13px] text-slate-400">schedule</span>
-                              <span title="Posted Date and Time">{post.date}</span>
+                              <span title="Posted Date and Time">{formatDateTime(post.createdAt)}</span>
                               {post.isEdited && (
-                                <span className="text-[9px] text-amber-700 bg-amber-50 border border-amber-200 px-1 py-0.2 rounded font-bold ml-0.5" title={post.editedAt ? `Edited at ${post.editedAt}` : "Edited"}>
+                                <span className="text-[9px] text-amber-700 bg-amber-50 border border-amber-200 px-1 py-0.2 rounded font-bold ml-0.5" title={post.editedAt ? `Edited at ${formatDateTime(post.editedAt)}` : "Edited"}>
                                   Edited
                                 </span>
                               )}
@@ -518,13 +822,14 @@ export const Community: React.FC<{ lang: string }> = ({ lang }) => {
                           <span className={`px-2.5 py-0.5 text-[9px] uppercase font-bold rounded-full ${
                             post.tag === "Pest Alert" ? "bg-rose-100 text-rose-800" :
                             post.tag === "Fertilizer" ? "bg-amber-100 text-amber-800" :
-                            post.tag === "Pumps" ? "bg-blue-100 text-blue-800" : "bg-slate-100 text-slate-600"
+                            post.tag === "Pumps" ? "bg-blue-100 text-blue-800" :
+                            post.tag === "Market" ? "bg-emerald-100 text-emerald-800" : "bg-slate-100 text-slate-600"
                           }`}>
                             {post.tag}
                           </span>
 
-                          {/* Edit & Delete Action Buttons for user posts */}
-                          {isUserAuthor && !isEditingThisPost && (
+                          {/* Edit & Delete Action Buttons for authorized author */}
+                          {isAuthor && !isEditingThisPost && (
                             <div className="flex items-center gap-1 ml-1 border-l border-slate-100 pl-2">
                               <button
                                 onClick={() => handleStartEdit(post)}
@@ -555,7 +860,7 @@ export const Community: React.FC<{ lang: string }> = ({ lang }) => {
                             <span>Are you sure you want to delete this post?</span>
                           </div>
                           <p className="text-[11px] text-rose-700 leading-normal">
-                            This will permanently remove your post from the community discussion feed.
+                            This will permanently remove your post and its comments from the live community.
                           </p>
                           <div className="flex justify-end gap-2 pt-1">
                             <button
@@ -626,17 +931,18 @@ export const Community: React.FC<{ lang: string }> = ({ lang }) => {
                           <div className="flex justify-end gap-2 pt-1">
                             <button
                               type="button"
-                              onClick={handleCancelEdit}
+                              onClick={() => setEditingPostId(null)}
                               className="px-3 py-1.5 bg-white border border-slate-200 text-slate-700 hover:bg-slate-100 rounded-lg text-xs font-bold transition cursor-pointer"
                             >
                               Cancel
                             </button>
                             <button
                               type="submit"
+                              disabled={isSavingEdit}
                               className="px-4 py-1.5 bg-primary hover:bg-emerald-800 text-white rounded-lg text-xs font-bold transition flex items-center gap-1 border-none cursor-pointer shadow-sm"
                             >
                               <span className="material-symbols-outlined text-sm">check</span>
-                              <span>Save Changes</span>
+                              <span>{isSavingEdit ? "Saving..." : "Save Changes"}</span>
                             </button>
                           </div>
                         </form>
@@ -656,17 +962,21 @@ export const Community: React.FC<{ lang: string }> = ({ lang }) => {
                           <div className="flex items-center gap-4 pt-2.5 border-t border-slate-50">
                             <button
                               onClick={() => handleLikePost(post.id)}
-                              className="flex items-center gap-1.5 text-xs font-bold text-slate-500 hover:text-emerald-700 bg-transparent border-none cursor-pointer"
+                              className={`flex items-center gap-1.5 text-xs font-bold transition bg-transparent border-none cursor-pointer ${
+                                hasLiked ? "text-emerald-700 font-extrabold" : "text-slate-500 hover:text-emerald-700"
+                              }`}
                             >
-                              <span className="material-symbols-outlined text-sm text-emerald-600 hover:scale-125 transition">thumb_up</span>
+                              <span className={`material-symbols-outlined text-sm ${hasLiked ? "text-emerald-600" : "text-slate-400"}`} style={{ fontVariationSettings: hasLiked ? "'FILL' 1" : "'FILL' 0" }}>
+                                thumb_up
+                              </span>
                               <span>{post.likes} {isTamil ? "லைக்ஸ்" : "Likes"}</span>
                             </button>
                             <button
-                              onClick={() => setExpandedComments(prev => ({ ...prev, [post.id]: !prev[post.id] }))}
+                              onClick={() => toggleComments(post.id)}
                               className="flex items-center gap-1.5 text-xs font-bold text-slate-500 hover:text-primary bg-transparent border-none cursor-pointer"
                             >
                               <span className="material-symbols-outlined text-sm text-slate-400">comment</span>
-                              <span>{(comments[post.id] || []).length + post.replies} {isTamil ? "கருத்துகள்" : "Comments"}</span>
+                              <span>{post.repliesCount || (comments[post.id] || []).length} {isTamil ? "கருத்துகள்" : "Comments"}</span>
                             </button>
                           </div>
 
@@ -678,75 +988,106 @@ export const Community: React.FC<{ lang: string }> = ({ lang }) => {
                                 <input
                                   type="text"
                                   value={newCommentText[post.id] || ""}
-                                  onChange={e => setNewCommentText(prev => ({ ...prev, [post.id]: e.target.value }))}
-                                  onKeyDown={e => { if (e.key === "Enter") handleAddComment(post.id); }}
-                                  placeholder={isTamil ? "கருத்து சேர்க்கவும்..." : "Add a comment..."}
+                                  onChange={(e) => setNewCommentText((prev) => ({ ...prev, [post.id]: e.target.value }))}
+                                  onKeyDown={(e) => {
+                                    if (e.key === "Enter") handleAddComment(post.id);
+                                  }}
+                                  placeholder={isTamil ? "கருத்து சேர்க்கவும்..." : "Add a reply or comment..."}
                                   className="flex-1 h-8 px-2.5 text-[11px] bg-slate-50 border border-slate-200 rounded-lg focus:ring-1 focus:ring-primary focus:outline-none"
                                 />
                                 <button
                                   onClick={() => handleAddComment(post.id)}
-                                  disabled={!newCommentText[post.id]?.trim()}
-                                  className="h-8 px-3 bg-primary text-white rounded-lg text-[11px] font-bold transition disabled:opacity-40 cursor-pointer border-none"
+                                  disabled={submittingComment[post.id] || !newCommentText[post.id]?.trim()}
+                                  className="h-8 px-3 bg-primary hover:bg-emerald-800 text-white rounded-lg text-[11px] font-bold transition disabled:opacity-40 cursor-pointer border-none flex items-center gap-1"
                                 >
-                                  {isTamil ? "சேர்" : "Post"}
+                                  <span>{isTamil ? "சேர்" : "Reply"}</span>
                                 </button>
                               </div>
 
+                              {/* Loading comments indicator */}
+                              {loadingComments[post.id] && (
+                                <p className="text-[10px] text-slate-400 font-semibold py-1">Loading comments...</p>
+                              )}
+
                               {/* Comments List */}
-                              {(comments[post.id] || []).map(c => (
-                                <div key={c.id} className="bg-slate-50 rounded-xl p-3 space-y-1.5">
-                                  <div className="flex justify-between items-start">
-                                    <div>
-                                      <span className="text-[11px] font-bold text-slate-800">{c.author}</span>
-                                      {c.isEdited && <span className="ml-1.5 text-[9px] text-amber-600 font-bold">(edited)</span>}
-                                      <span className="text-[10px] text-slate-400 ml-2">{c.date}</span>
+                              {(comments[post.id] || []).map((c) => {
+                                const isCommAuthor = isCommentAuthor(c);
+                                const commLiked = Boolean(c.likedBy && c.likedBy.includes(currentUserId));
+
+                                return (
+                                  <div key={c.id} className="bg-slate-50 rounded-xl p-3 space-y-1.5">
+                                    <div className="flex justify-between items-start">
+                                      <div className="flex items-center gap-2">
+                                        <img src={c.avatar} alt={c.author} className="w-5 h-5 rounded-full object-cover" />
+                                        <span className="text-[11px] font-bold text-slate-800">{c.author}</span>
+                                        {c.isEdited && <span className="text-[9px] text-amber-600 font-bold">(edited)</span>}
+                                        <span className="text-[10px] text-slate-400">{formatDateTime(c.createdAt)}</span>
+                                      </div>
+                                      {isCommAuthor && (
+                                        <div className="flex gap-1">
+                                          <button
+                                            onClick={() => {
+                                              setEditingCommentId(c.id);
+                                              setEditCommentText(c.text);
+                                            }}
+                                            className="text-[10px] text-slate-400 hover:text-amber-600 cursor-pointer bg-transparent border-none"
+                                            title="Edit comment"
+                                          >
+                                            <span className="material-symbols-outlined text-xs">edit</span>
+                                          </button>
+                                          <button
+                                            onClick={() => handleDeleteComment(c.id)}
+                                            className="text-[10px] text-slate-400 hover:text-red-600 cursor-pointer bg-transparent border-none"
+                                            title="Delete comment"
+                                          >
+                                            <span className="material-symbols-outlined text-xs">delete</span>
+                                          </button>
+                                        </div>
+                                      )}
                                     </div>
-                                    {c.isUserComment && (
-                                      <div className="flex gap-1">
+
+                                    {editingCommentId === c.id ? (
+                                      <div className="flex gap-2 pt-1">
+                                        <input
+                                          type="text"
+                                          value={editCommentText}
+                                          onChange={(e) => setEditCommentText(e.target.value)}
+                                          className="flex-1 h-7 px-2 text-[11px] bg-white border border-slate-200 rounded-lg focus:ring-1 focus:ring-primary focus:outline-none"
+                                        />
                                         <button
-                                          onClick={() => { setEditingCommentId(c.id); setEditCommentText(c.text); }}
-                                          className="text-[10px] text-slate-400 hover:text-amber-600 cursor-pointer bg-transparent border-none"
+                                          onClick={() => handleEditComment(c.id)}
+                                          className="h-7 px-2 bg-primary text-white rounded-lg text-[10px] font-bold border-none cursor-pointer"
                                         >
-                                          <span className="material-symbols-outlined text-xs">edit</span>
+                                          {isTamil ? "சேமி" : "Save"}
                                         </button>
                                         <button
-                                          onClick={() => handleDeleteComment(post.id, c.id)}
-                                          className="text-[10px] text-slate-400 hover:text-red-600 cursor-pointer bg-transparent border-none"
+                                          onClick={() => {
+                                            setEditingCommentId(null);
+                                            setEditCommentText("");
+                                          }}
+                                          className="h-7 px-2 bg-slate-200 text-slate-700 rounded-lg text-[10px] font-bold cursor-pointer"
                                         >
-                                          <span className="material-symbols-outlined text-xs">delete</span>
+                                          {isTamil ? "இல்லை" : "Cancel"}
                                         </button>
                                       </div>
+                                    ) : (
+                                      <p className="text-[11px] text-slate-700 leading-relaxed">{c.text}</p>
                                     )}
+
+                                    <button
+                                      onClick={() => handleLikeComment(c.id)}
+                                      className={`flex items-center gap-1 text-[10px] transition cursor-pointer bg-transparent border-none ${
+                                        commLiked ? "text-emerald-700 font-bold" : "text-slate-400 hover:text-emerald-700"
+                                      }`}
+                                    >
+                                      <span className="material-symbols-outlined text-xs" style={{ fontVariationSettings: commLiked ? "'FILL' 1" : "'FILL' 0" }}>
+                                        thumb_up
+                                      </span>
+                                      <span>{c.likes}</span>
+                                    </button>
                                   </div>
-
-                                  {editingCommentId === c.id ? (
-                                    <div className="flex gap-2">
-                                      <input
-                                        type="text"
-                                        value={editCommentText}
-                                        onChange={e => setEditCommentText(e.target.value)}
-                                        className="flex-1 h-7 px-2 text-[11px] bg-white border border-slate-200 rounded-lg focus:ring-1 focus:ring-primary focus:outline-none"
-                                      />
-                                      <button onClick={() => handleEditComment(post.id, c.id)} className="h-7 px-2 bg-primary text-white rounded-lg text-[10px] font-bold border-none cursor-pointer">
-                                        {isTamil ? "சேமி" : "Save"}
-                                      </button>
-                                      <button onClick={() => { setEditingCommentId(null); setEditCommentText(""); }} className="h-7 px-2 bg-slate-200 text-slate-700 rounded-lg text-[10px] font-bold cursor-pointer">
-                                        {isTamil ? "இல்லை" : "Cancel"}
-                                      </button>
-                                    </div>
-                                  ) : (
-                                    <p className="text-[11px] text-slate-700 leading-relaxed">{c.text}</p>
-                                  )}
-
-                                  <button
-                                    onClick={() => handleLikeComment(post.id, c.id)}
-                                    className="flex items-center gap-1 text-[10px] text-slate-400 hover:text-emerald-700 cursor-pointer bg-transparent border-none"
-                                  >
-                                    <span className="material-symbols-outlined text-xs">thumb_up</span>
-                                    {c.likes}
-                                  </button>
-                                </div>
-                              ))}
+                                );
+                              })}
                             </div>
                           )}
                         </div>

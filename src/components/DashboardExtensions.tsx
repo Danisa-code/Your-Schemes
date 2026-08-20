@@ -255,7 +255,7 @@ export const DashboardExtensions: React.FC<{ lang: string; weatherData?: any }> 
 
         {/* Call-to-action warning */}
         <div className="p-3.5 bg-rose-50/50 rounded-xl border border-rose-100 text-xs text-rose-900 flex items-start gap-2.5">
-          <span className="material-symbols-outlined text-rose-600 text-sm mt-0.5">info_outline</span>
+          <span className="material-symbols-outlined text-rose-600 text-base mt-0.5" style={{ fontVariationSettings: "'FILL' 1" }}>info</span>
           <p>
             You have <span className="font-bold text-rose-800">1 urgent warning alert</span> regarding your crop insurance policy. Apply before the deadline to ensure your wheat fields remain fully insured.
           </p>
